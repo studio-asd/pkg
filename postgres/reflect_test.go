@@ -23,6 +23,8 @@ type testStruct struct {
 }
 
 func TestNullPtr(t *testing.T) {
+	t.Parallel()
+
 	var ip *int64
 	np := NullPtr(&ip)
 	if err := np.Scan(nil); err != nil {
@@ -48,6 +50,8 @@ func TestNullPtr(t *testing.T) {
 }
 
 func TestStructScanner(t *testing.T) {
+	t.Parallel()
+
 	f := StructScanner[testStruct]()
 	var s testStruct
 	args := f(&s)
@@ -65,6 +69,8 @@ func TestStructScanner(t *testing.T) {
 }
 
 func TestCollectStructs(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	if _, err := testPG.Exec(ctx, "DROP TABLE IF EXISTS structs"); err != nil {
 		t.Fatal(err)

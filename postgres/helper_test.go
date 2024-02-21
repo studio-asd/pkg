@@ -1,3 +1,9 @@
+// Helper contains modified codes from Go's pkgsite.
+//
+// Copyright 2019 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
 package postgres
 
 import (
@@ -11,6 +17,7 @@ import (
 )
 
 func TestBulkInsert(t *testing.T) {
+	t.Parallel()
 	table := "test_bulk_insert"
 
 	for _, test := range []struct {
@@ -148,6 +155,8 @@ func TestBulkInsert(t *testing.T) {
 }
 
 func TestBulkUpdate(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
 	defer cancel()
 

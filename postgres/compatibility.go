@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -42,6 +43,9 @@ func (r *RowsCompat) Scan(dest ...any) error {
 	if r.pgxRows != nil {
 		err := r.pgxRows.Scan(dest...)
 		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				err = sql.ErrNoRows
+			}
 			err = fmt.Errorf("pgx_rowscompat: %w", err)
 		}
 		return err
@@ -56,7 +60,13 @@ type RowCompat struct {
 
 func (r *RowCompat) Scan(dest ...any) error {
 	if r.pgxRow != nil {
-		return r.pgxRow.Scan(dest...)
+		err := r.pgxRow.Scan(dest...)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				err = sql.ErrNoRows
+			}
+		}
+		return err
 	}
 	return r.row.Scan(dest...)
 }

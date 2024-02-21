@@ -13,10 +13,8 @@ const (
 	// While http.Header is also a map[string]string, but we don't want to make things complicated by combining
 	// two different things into one.
 	requestIDInst         = "inst-request-id"
-	experimentsInst       = "inst-experiments"
-	bffAPINameInst        = "inst-bff-api-name"
-	bffAPIOwnerInst       = "inst-bff-api-owner"
-	bffAPIPermission      = "inst-bff-api-permission"
+	apiNameInst           = "inst-bff-api-name"
+	apiOwnerInst          = "inst-bff-api-owner"
 	forwardedForInst      = "inst-forwarded-for"
 	debugIDInst           = "inst-debug-id"
 	preferredLanguageInst = "inst-preferred-language"
@@ -76,24 +74,25 @@ func (b Baggage) ToTextMapCarrier() map[string]string {
 	// Please adjust the length of the text map carrier based on the baggage KV.
 	carrier := make(map[string]string, 6)
 	carrier[requestIDInst] = b.RequestID
-	carrier[bffAPINameInst] = b.APIName
-	carrier[bffAPIOwnerInst] = b.APIOwner
+	carrier[apiNameInst] = b.APIName
+	carrier[apiOwnerInst] = b.APIOwner
 	carrier[debugIDInst] = b.DebugID
 	carrier[preferredLanguageInst] = b.PreferredLanguage
 	return carrier
 }
 
-// NewContextFromTextMapCarrier creates a new instrumentation context from a dynamic map carrier.
-func NewContextFromTextMapCarrier(ctx context.Context, carrier map[string]string) context.Context {
+// BaggageFromTextMapCarrier creates a new baggage from text map carrier. This kind of format is used to easily inject them to
+// another protocol like HTTP(header) and gRPC(metadata). This is why several observability provider also use this kind of format.
+func BaggageFromTextMapCarrier(carrier map[string]string) Baggage {
 	baggage := Baggage{
 		RequestID:         carrier[requestIDInst],
-		APIName:           carrier[bffAPINameInst],
-		APIOwner:          carrier[bffAPIOwnerInst],
+		APIName:           carrier[apiNameInst],
+		APIOwner:          carrier[apiOwnerInst],
 		DebugID:           carrier[debugIDInst],
 		PreferredLanguage: carrier[preferredLanguageInst],
 		valid:             true,
 	}
-	return context.WithValue(ctx, baggageKey, baggage)
+	return baggage
 }
 
 // BaggageFromContext returns the insturmented bagage from a context.Context.
@@ -105,7 +104,7 @@ func BaggageFromContext(ctx context.Context) Baggage {
 	return baggage
 }
 
-// WithBaggage set the context key using the passed baggage value.
-func WithBaggage(ctx context.Context, bg Baggage) context.Context {
+// ContextWithBaggage set the context key using the passed baggage value.
+func ContextWithBaggage(ctx context.Context, bg Baggage) context.Context {
 	return context.WithValue(ctx, baggageKey, bg)
 }

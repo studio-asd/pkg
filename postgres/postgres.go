@@ -86,12 +86,17 @@ type Postgres struct {
 	pgx *pgxpool.Pool
 	tx  Transaction
 
+	fork bool
 	// searchPathMu protects set of the searchpath.
 	searchPathMu sync.RWMutex
 	searchPath   string // default schema separated by comma.
 	// closeMu protects closing postgres connection concurrently.
 	closeMu sync.Mutex
 	closed  bool
+	// cloneOnce is used to ensure the clone.sql to be applied once in a database.
+	// The forked connection will use the same cloneOnce from previous so it won't
+	// apply the function again.
+	cloneOnce *sync.Once
 }
 
 // InTransaction returns whether the postgres object is currently in transaction or not. The information need to be
@@ -166,6 +171,7 @@ func Connect(ctx context.Context, connConfig ConnectConfig) (*Postgres, error) {
 		db:         db,
 		pgx:        pgxdb,
 		searchPath: "public",
+		cloneOnce:  &sync.Once{},
 	}
 	return p, nil
 }
@@ -326,7 +332,6 @@ func (p *Postgres) SearchPath() []string {
 
 func (p *Postgres) Close() (err error) {
 	p.closeMu.Lock()
-
 	defer func() {
 		if err == nil {
 			p.closed = true
@@ -336,7 +341,7 @@ func (p *Postgres) Close() (err error) {
 
 	if p.pgx != nil {
 		p.pgx.Close()
-		return nil
+		return
 	}
 	err = p.db.Close()
 	return

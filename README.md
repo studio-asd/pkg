@@ -1,6 +1,6 @@
 # Package
 
-This repository contains all package that I usually use for my own projects
+This repository contains all Go packages that I usually use for my own projects
 
 ## License
 

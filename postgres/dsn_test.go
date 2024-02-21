@@ -7,6 +7,8 @@ import (
 )
 
 func TestPostgres(t *testing.T) {
+	t.Parallel()
+
 	expected := map[string]string{
 		"user":     "bob",
 		"password": "secret",
