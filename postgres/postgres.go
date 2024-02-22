@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -35,7 +36,11 @@ type ConnectConfig struct {
 	Tracer       trace.Tracer
 }
 
-func (c *ConnectConfig) Validate() error {
+func (c *ConnectConfig) copy() ConnectConfig {
+	return *c
+}
+
+func (c *ConnectConfig) validate() error {
 	if c.Username == "" {
 		return errors.New("postgres: username cannot be empty")
 	}
@@ -66,7 +71,6 @@ func (c *ConnectConfig) Validate() error {
 	if c.MaxOpenConns == 0 {
 		c.MaxOpenConns = defaultMaxOpenConns
 	}
-
 	return nil
 }
 
@@ -86,13 +90,16 @@ type Postgres struct {
 	pgx *pgxpool.Pool
 	tx  Transaction
 
-	fork bool
 	// searchPathMu protects set of the searchpath.
 	searchPathMu sync.RWMutex
 	searchPath   string // default schema separated by comma.
 	// closeMu protects closing postgres connection concurrently.
 	closeMu sync.Mutex
 	closed  bool
+
+	// originConn is the origin connection of a fork. This connection will be used in the case
+	// of closing a connection and destroying the new schema.
+	originConn *Postgres
 	// cloneOnce is used to ensure the clone.sql to be applied once in a database.
 	// The forked connection will use the same cloneOnce from previous so it won't
 	// apply the function again.
@@ -113,7 +120,7 @@ func (p *Postgres) Config() ConnectConfig {
 // Connect returns connected Postgres object.
 func Connect(ctx context.Context, connConfig ConnectConfig) (*Postgres, error) {
 	config := &connConfig
-	if err := config.Validate(); err != nil {
+	if err := config.validate(); err != nil {
 		return nil, err
 	}
 
@@ -309,8 +316,8 @@ func (p *Postgres) Ping(ctx context.Context) error {
 	return p.db.PingContext(ctx)
 }
 
-// SetDefaultSearchPath sets the default schema for the current connection.
-func (p *Postgres) SetDefaultSearchPath(ctx context.Context, schemaName string) error {
+// setDefaultSearchPath sets the default schema for the current connection.
+func (p *Postgres) setDefaultSearchPath(ctx context.Context, schemaName string) error {
 	query := fmt.Sprintf("SET search_path TO %s;", schemaName)
 	_, err := p.Exec(context.Background(), query)
 	if err != nil {
@@ -332,9 +339,41 @@ func (p *Postgres) SearchPath() []string {
 
 func (p *Postgres) Close() (err error) {
 	p.closeMu.Lock()
+	if p.closed {
+		p.closeMu.Unlock()
+		return nil
+	}
+
 	defer func() {
-		if err == nil {
-			p.closed = true
+		if err != nil {
+			p.closeMu.Unlock()
+			return
+		}
+
+		p.closed = true
+		// Clean the schema by deleting the schema if we know the current connection is forked.
+		// The reason of why we clean the schema here is, usually the new schema is used in a
+		// local function test and not via global variable. So this means when the connection is closed
+		// we don't need the schema anymore as our test have been completed.
+		if p.originConn != nil && testing.Testing() {
+			var connErr error
+			var newConn bool
+
+			conn := p.originConn
+			if conn.closed {
+				conf := *p.originConn.config
+				conn, connErr = Connect(context.Background(), conf)
+				if connErr != nil {
+					return
+				}
+				newConn = true
+			}
+			// Do best effort attempt to drop the schema.
+			dropSchemaQuery := fmt.Sprintf("DROP SCHEMA %s CASCADE;", p.searchPath)
+			_, err = conn.Exec(context.Background(), dropSchemaQuery)
+			if newConn {
+				_ = conn.Close()
+			}
 		}
 		p.closeMu.Unlock()
 	}()

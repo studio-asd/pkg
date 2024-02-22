@@ -14,7 +14,7 @@ import (
 //go:embed  clone_schema.sql
 var cloneSQL embed.FS
 
-const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+const letters = "abcdefghijklmnopqrstuvwxyz"
 
 // randString returns a random string with length of n.
 func randString(n int) string {
@@ -114,6 +114,9 @@ func ForkConnWithNewSchema(ctx context.Context, pg *Postgres, schemaName string)
 	if !testing.Testing() {
 		panic("forking connection with new schema can only be done inside testing")
 	}
+	if pg.originConn != nil {
+		return nil, errors.New("cannot fork a new connection from a fork. Please use the origin connection")
+	}
 	if pg.config.DBName == "" {
 		return nil, errors.New("can only fork connection to a new schema when connected to a database")
 	}
@@ -148,19 +151,21 @@ func ForkConnWithNewSchema(ctx context.Context, pg *Postgres, schemaName string)
 	if errDo != nil {
 		return nil, errDo
 	}
-	// Clone the baseline schema to the designated schema.
+
+	// Clone the baseline schema to the designated schema. The function will automatically create the schema.
 	if err := cloneSchema(pg, "baseline", schemaName); err != nil {
 		return nil, err
 	}
 
-	conf := *pg.config
-	newConn, err := Connect(ctx, conf)
+	newConn, err := Connect(ctx, pg.config.copy())
 	if err != nil {
 		return nil, err
 	}
-	if err := newConn.SetDefaultSearchPath(ctx, schemaName); err != nil {
+	if err := newConn.setDefaultSearchPath(ctx, schemaName); err != nil {
 		return nil, err
 	}
+	// Set the origin connection, so we know this is a fork.
+	newConn.originConn = pg
 	// Set the new connection clone once with the origin clone once so we won't do it again in the same connection.
 	newConn.cloneOnce = pg.cloneOnce
 	return newConn, nil
