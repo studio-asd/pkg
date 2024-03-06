@@ -1,7 +1,5 @@
 # Service Runner
 
-**Experiemnts Warning**
-
 Service runner is a helper and steroid for `func main()` so the program can correctly listen to all `exit` signals and enable auto-upgrade via `SIGHUP(1/HUP)` via [tableflip](https://github.com/cloudflare/tableflip).
 
 The motivation to create the service runner coming from our usecase of running a large Go monolith on top of VM using `systemd`. Inside the applications, we have a lot of modules with some backgrund processes that we called `service`. Previously we are trying to manage all of the services one by one, and with this our code complexity bloats. After sometime we decided to create a `service operator` package on top of our services to reduce the code complexity.
@@ -16,31 +14,31 @@ This package require Go 1.22+ as we use the new `http.ServeMux` to serve the adm
 
 1. Graceful Shutdown
 
-	The service runner ensure a program to be shutdown gracefuly and give some mechanism for the user to wait until all requests are being taken care by the program before shutdown.
+   The service runner ensure a program to be shutdown gracefuly and give some mechanism for the user to wait until all requests are being taken care by the program before shutdown.
 
-	While the runner helps to ensure the program to exit gracefully, the user still need to be aware of what resource/service that runner will close first. To understand more about this, please read more on how to use the runner.
+   While the runner helps to ensure the program to exit gracefully, the user still need to be aware of what resource/service that runner will close first. To understand more about this, please read more on how to use the runner.
 
 1. Properly Close/Release All Resources
 
-	When we create a Go program, for example a web service, we usually opens a lot of connections and resources to interact with databases and other services or protocols. But, sometimes all these resources are not being properly closed/released when the program stops. This can cause some problems as sometimes it leaves some resource to be leaked.
+   When we create a Go program, for example a web service, we usually opens a lot of connections and resources to interact with databases and other services or protocols. But, sometimes all these resources are not being properly closed/released when the program stops. This can cause some problems as sometimes it leaves some resource to be leaked.
 
-	Runner wants to solve this problem by properly releasing all resources when program stops.
+   Runner wants to solve this problem by properly releasing all resources when program stops.
 
 1. Self Upgrade
 
-	Runner allow program to self-upgrade via `SIGHUP(1)`. This allow us to deploy Go binary to virtual machine while allowed the program to be easily upgraded. Sometimes we don't need container for all usecases and just want a simple deployment mechanism. You can always disable the upgrader when you don't need this feature.
+   Runner allow program to self-upgrade via `SIGHUP(1)`. This allow us to deploy Go binary to virtual machine while allowed the program to be easily upgraded. Sometimes we don't need container for all usecases and just want a simple deployment mechanism. You can always disable the upgrader when you don't need this feature.
 
 1. Healthcheck
 
-    The package provides `active` and `passive` healthcheck. Please read more about this feature [here](##Healthcheck).
+   The package provides `active` and `passive` healthcheck. Please read more about this feature [here](##Healthcheck).
 
 1. Admin Server
 
-    Service runner package opens an `admin` port by default. The `admin` HTTP server serves multiple endpoints for:
+   Service runner package opens an `admin` port by default. The `admin` HTTP server serves multiple endpoints for:
 
-    - Exposing `/metrics` for Prometheus metrics.
-    - Exposing `/health` for health-checking.
-    - Exposing `/debug/**` for profiling.
+   - Exposing `/metrics` for Prometheus metrics.
+   - Exposing `/health` for health-checking.
+   - Exposing `/debug/**` for profiling.
 
 ## Understanding Runner
 
@@ -60,27 +58,27 @@ There are several `service` state tracked by the runner. The `state` are:
 
 1. Initiating
 
-    This is when the runner is about to invoke `Init` function.
+   This is when the runner is about to invoke `Init` function.
 
 1. Initiated
 
-    This is after the runner succesfully invoke `Init` function.
+   This is after the runner succesfully invoke `Init` function.
 
 1. Starting
 
-	This is when the runner is about to invoke `Run` function.
+   This is when the runner is about to invoke `Run` function.
 
 1. Running
 
-	This is when runner receive `ready` callback.
+   This is when runner receive `ready` callback.
 
 1. Shutting Down
 
-	This is when runner is about to invoke `Stop` function.
+   This is when runner is about to invoke `Stop` function.
 
 1. Stopped
 
-	This is when the `service` is completely stopped, which means the `Stop` function already returned.
+   This is when the `service` is completely stopped, which means the `Stop` function already returned.
 
 ### When Init Is Called?
 
@@ -136,19 +134,19 @@ Service runner provides several default services to help the user running a Go p
 
 1. Set the `logger` configuration using `log/slog`.
 
-	Since Go 1.21.0, Go provide an official structured logging library called `slog`. We use this to provide a standard logging for the program.
+   Since Go 1.21.0, Go provide an official structured logging library called `slog`. We use this to provide a standard logging for the program.
 
 2. Self-upgrade the binary.
 
-	To self-upgrade itself, the program need to listen to `SIGHUP` signal to properly transfer all file descriptors to the child program and shutdown the parent.
+   To self-upgrade itself, the program need to listen to `SIGHUP` signal to properly transfer all file descriptors to the child program and shutdown the parent.
 
 3. Start open-telemetry trace and metrics provider.
 
-	We want tracing and metrics collection to be available out of the box, and open-telemetry is an open and widely used standard.
+   We want tracing and metrics collection to be available out of the box, and open-telemetry is an open and widely used standard.
 
 4. Provide `pprof` and `healthcheck` endpoint by spawning an additional `HTTP` server called `admin` in a different port(configurable).
 
-	Usually a web service/server opens a different port to serve administrational endpoints. We want to provide similar things so user can use the server to do things like profiling(via pprof) and healthcheck.
+   Usually a web service/server opens a different port to serve administrational endpoints. We want to provide similar things so user can use the server to do things like profiling(via pprof) and healthcheck.
 
 ## Healthcheck
 

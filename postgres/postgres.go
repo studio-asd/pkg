@@ -31,6 +31,7 @@ type ConnectConfig struct {
 	Host         string
 	Port         string
 	DBName       string
+	SearchPath   string
 	SSLMode      string
 	MaxOpenConns int
 	Tracer       trace.Tracer
@@ -79,6 +80,9 @@ func (c *ConnectConfig) validate() error {
 //	For example: postgres://username:password@localhost:5432/mydb?sslmode=false.
 func (c *ConnectConfig) DSN() (url string, dsn map[string]string, err error) {
 	url = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s", c.Username, c.Password, c.Host, c.Port, c.DBName, c.SSLMode)
+	if c.SearchPath != "" {
+		url = url + "&searchPath=" + c.SearchPath
+	}
 	dsn, err = PostgresDSN(url)
 	return
 }
@@ -351,30 +355,7 @@ func (p *Postgres) Close() (err error) {
 		}
 
 		p.closed = true
-		// Clean the schema by deleting the schema if we know the current connection is forked.
-		// The reason of why we clean the schema here is, usually the new schema is used in a
-		// local function test and not via global variable. So this means when the connection is closed
-		// we don't need the schema anymore as our test have been completed.
-		if p.originConn != nil && testing.Testing() {
-			var connErr error
-			var newConn bool
-
-			conn := p.originConn
-			if conn.closed {
-				conf := *p.originConn.config
-				conn, connErr = Connect(context.Background(), conf)
-				if connErr != nil {
-					return
-				}
-				newConn = true
-			}
-			// Do best effort attempt to drop the schema.
-			dropSchemaQuery := fmt.Sprintf("DROP SCHEMA %s CASCADE;", p.searchPath)
-			_, err = conn.Exec(context.Background(), dropSchemaQuery)
-			if newConn {
-				_ = conn.Close()
-			}
-		}
+		clean(p)
 		p.closeMu.Unlock()
 	}()
 
@@ -386,7 +367,39 @@ func (p *Postgres) Close() (err error) {
 	return
 }
 
-// Sometimes other tools require us to use the stdlib database. So we provide a function to do so.
+// clean cleans the schema by deleting the schema if we know the current connection is forked.
+// The reason of why we clean the schema here is, usually the new schema is used in a
+// local function test and not via global variable. So this means when the connection is closed
+// we don't need the schema anymore as our test have been completed.
+func clean(p *Postgres) {
+	if !testing.Testing() {
+		return
+	}
+	if p.originConn == nil {
+		return
+	}
+
+	var connErr error
+	var newConn bool
+
+	conn := p.originConn
+	if conn.closed {
+		conf := *p.originConn.config
+		conn, connErr = Connect(context.Background(), conf)
+		if connErr != nil {
+			return
+		}
+		newConn = true
+	}
+	// Do best effort attempt to drop the schema.
+	dropSchemaQuery := fmt.Sprintf("DROP SCHEMA %s CASCADE;", p.searchPath)
+	conn.Exec(context.Background(), dropSchemaQuery)
+	if newConn {
+		_ = conn.Close()
+	}
+}
+
+// Sometimes other libraries require us to use the stdlib database. So we provide a function to do so.
 func (p *Postgres) StdlibDB() *sql.DB {
 	if p.db != nil {
 		return p.db

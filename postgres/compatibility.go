@@ -43,8 +43,9 @@ func (r *RowsCompat) Scan(dest ...any) error {
 	if r.pgxRows != nil {
 		err := r.pgxRows.Scan(dest...)
 		if err != nil {
+			// Append the error with sql.ErrNoRows so we can keep using errors.Is(error, sql.ErrNoRows).
 			if errors.Is(err, pgx.ErrNoRows) {
-				err = sql.ErrNoRows
+				err = errors.Join(err, sql.ErrNoRows)
 			}
 			err = fmt.Errorf("pgx_rowscompat: %w", err)
 		}
@@ -61,9 +62,10 @@ type RowCompat struct {
 func (r *RowCompat) Scan(dest ...any) error {
 	if r.pgxRow != nil {
 		err := r.pgxRow.Scan(dest...)
+		// Append the error with sql.ErrNoRows so we can keep using errors.Is(error, sql.ErrNoRows).
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				err = sql.ErrNoRows
+				err = errors.Join(err, sql.ErrNoRows)
 			}
 		}
 		return err

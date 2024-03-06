@@ -163,7 +163,7 @@ CREATE TABLE IF NOT EXISTS testing (
 	}
 
 	var forks []*Postgres
-	for i := 0; i < 1; i++ {
+	for i := 0; i < 30; i++ {
 		forkConn, err := ForkConnWithNewSchema(context.Background(), pg, "")
 		if err != nil {
 			t.Fatal(err)

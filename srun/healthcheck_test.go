@@ -2,6 +2,7 @@ package srun
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -93,4 +94,46 @@ func TestHealthcheckRegister(t *testing.T) {
 			}
 		})
 	}
+}
+
+type TestHealthcheckNotif struct{}
+
+func (*TestHealthcheckNotif) Name() string {
+	return "test-notif"
+}
+
+func (*TestHealthcheckNotif) Init(ctx Context) error {
+	return nil
+}
+
+func (*TestHealthcheckNotif) Run(ctx context.Context) error {
+	return nil
+}
+
+func (*TestHealthcheckNotif) Ready(ctx context.Context) error {
+	return nil
+}
+
+func (*TestHealthcheckNotif) Stop(ctx context.Context) error {
+	return nil
+}
+
+func (t *TestHealthcheckNotif) ConsumeHealthcheckNotification(fn HealthcheckNotifyFunc) {
+	err := fn([]string{"test_svc"}, func(notif HealthcheckNotification) {
+		fmt.Println("terima notif")
+	})
+	fmt.Print(err)
+}
+
+func TestHandleNotifications(t *testing.T) {
+	hs := newHealthcheckService(HealthcheckConfig{})
+	if err := hs.register(&TestHealthcheckNotif{}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go hs.handleNotifications(ctx)
+	hs.notifC <- HealthcheckNotification{
+		ServiceName: "test_svc",
+	}
+	cancel()
 }

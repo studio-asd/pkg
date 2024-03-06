@@ -22,7 +22,7 @@ func randString(n int) string {
 	for i := range b {
 		b[i] = letters[rand.Intn(len(letters))] // #nosec
 	}
-	return string(b)
+	return "pgtesting_" + string(b)
 }
 
 // CreateDatabase automatically and forcefully creates database using the current connection and creates a new connection

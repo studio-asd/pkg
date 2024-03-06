@@ -8,7 +8,7 @@ This package provide some helper functions taken and modified from https://githu
 
 ## Disclaimer
 
-This package doesn't guarantee full backwards compatibility between `stdlib` and `jackq/pgx` because `gpx` use a lot of custom error inside the package itself. For example, `sql.ErrNoRows` is `pgx.ErrNoRows` in `pgx`. We tried to convert this back in some cases, but not all.
+This package doesn't guarantee full backwards compatibility between `stdlib` and `jackq/pgx` because `pgx` use a lot of custom error inside the package itself. For example, `sql.ErrNoRows` is `pgx.ErrNoRows` in `pgx`. We tried to convert this back in some cases, but not all.
 
 ## Testing
 
@@ -16,11 +16,11 @@ The package provide several helper functions with the aim to make testing easier
 
 1. Create Database.
 
-    User is allowed to create a new database via `CreateDatabase` function. The function will `forcefully` creates the database, which means it will be `drop` the existing database and create a new one if needed.
+   User is allowed to create a new database via `CreateDatabase` function. The function will `forcefully` creates the database, which means it will be `drop` the existing database and create a new one if needed.
 
 1. Drop Database.
 
-    User is allowed to drop a database is it no-longer used.
+   User is allowed to drop a database is it no-longer used.
 
 1. Apply Schema.
 
@@ -28,7 +28,13 @@ The package provide several helper functions with the aim to make testing easier
 
 ### Parallel Testing With Multiple Schemas
 
-The package allows the user to perform parallel testing to a single Postgres database by separating [Postgresql Schema](https://www.postgresql.org/docs/current/ddl-schemas.html) for each connection/session.
+The package allows the user to perform parallel testing to a single Postgres database by separating [Postgresql Schema](https://www.postgresql.org/docs/current/ddl-schemas.html) for each connection/session. Currently, it only supports the `public` schema.
+
+**Limitation**
+
+Currently, the test helper only taking `public` schema as the source of truth. And it expects everything is created within the `public` schema, so it won't work for multi-schema setup.
+
+If you create everything in the `public` schema then the helper functions will work as expected.
 
 **One Session One Schema**
 

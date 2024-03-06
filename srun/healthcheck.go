@@ -34,6 +34,15 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
+)
+
+var _ ServiceRunnerAware = (*HealthcheckService)(nil)
+
+const (
+	healthcheckDefaultTimeout  = time.Second * 5
+	healthcheckDefaultInterval = time.Second * 20
 )
 
 type (
@@ -119,7 +128,7 @@ type HealthcheckConsumer interface {
 	//			}
 	//		})
 	//	}
-	ConsumeHealthcheckNotification(HealthcheckNotifyFunc) error
+	ConsumeHealthcheckNotification(HealthcheckNotifyFunc)
 }
 
 // HealthcheckNotifyFunc manage the loops and notify the HealthcheckNotifyFunc all the notifications of the subscriptions.
@@ -130,7 +139,7 @@ type HealthcheckNotifyFunc func([]string, HealthcheckConsumeFunc) error
 
 // HealthcheckConsumeFunc consumes the healthcheck notification and loops through all the services healthcheck notification that
 // the service subscribes to.
-type HealthcheckConsumeFunc func(HealthcheckNotification) error
+type HealthcheckConsumeFunc func(HealthcheckNotification)
 
 // HealthcheckNotification is a message of notification with service healthcheck status information.
 type HealthcheckNotification struct {
@@ -141,12 +150,20 @@ type HealthcheckNotification struct {
 }
 
 type HealthcheckConfig struct {
-	Disable bool
-	Timeout time.Duration
+	Disable  bool
+	Timeout  time.Duration
+	Interval time.Duration
 }
 
 // HealthcheckService provides a service that actively checks the services. And it continuously notify other services
 // that subscribes for any health updates from other services.
+//
+// There are two types of worker in the healthcheck service.
+//  1. Broadcast Worker.
+//     The broadcast worker is used to broadcast the healthcheck notification to all services that consumes the notification.
+//     Thwe worker basically loops through all conumers and multiplex the notifications to all services.
+//  2. Check Worker.
+//     The check woerker is used to periodically checks the services healthcheck and send the result to the notification channel.
 type HealthcheckService struct {
 	config HealthcheckConfig
 	notifC chan HealthcheckNotification
@@ -165,6 +182,8 @@ type HealthcheckService struct {
 	// as this channel acted as the multiplexer to all consumers(all consumers will receive the same message). We don't create
 	// the channel for all services because it is pointeless to provide the notification for a service without consumer.
 	broadcastC []chan HealthcheckNotification
+
+	readyC chan struct{}
 }
 
 func newHealthcheckService(config HealthcheckConfig) *HealthcheckService {
@@ -172,6 +191,7 @@ func newHealthcheckService(config HealthcheckConfig) *HealthcheckService {
 		config:    config,
 		services:  make(map[ServiceRunnerAware]Healthcheck),
 		notifiers: make(map[ServiceRunnerAware]*HealthcheckNotifier),
+		readyC:    make(chan struct{}, 1),
 	}
 	if !config.Disable {
 		ccs, _ := newConcurrentServices(nil)
@@ -227,29 +247,116 @@ func (h *HealthcheckService) register(svc ServiceRunnerAware) error {
 	return nil
 }
 
+func (h *HealthcheckService) Name() string {
+	return "healthcheck-service"
+}
+
+func (h *HealthcheckService) Init(ctx Context) error {
+	return nil
+}
+
 func (h *HealthcheckService) Run(ctx context.Context) error {
-	// var notificationsC []chan HealthcheckNotification
-	// // Create the consumers of health check notification.
-	// for _, consumer := range h.consumers {
-	// 	notifC := make(chan HealthcheckNotification, 100)
-	// 	NewLongRunningTask(fmt.Sprint("consumer-healthcheck-%s", consumer.Name()), func(ctx context.Context) error {
-	// 		return consumer.ConsumeHealthcheckNotification(func(s []string, hcf HealthcheckConsumeFunc) error {
-	// 			return nil
-	// 		})
-	// 	})
-	// 	notificationsC = append(notificationsC, notifC)
-	// }
+	g := errgroup.Group{}
+	// Only handle notifications if there are consumers of the notification.
+	if len(h.consumers) > 0 {
+		g.Go(func() error {
+			return h.handleNotifications(ctx)
+		})
+	}
+	// Only check the services is there are services that implements Healthcheck.
+	if len(h.services) > 0 {
+		g.Go(func() error {
+			return h.handleChecks(ctx)
+		})
+	}
+	time.AfterFunc(time.Millisecond*300, func() {
+		h.readyC <- struct{}{}
+	})
+	return g.Wait()
+}
+
+func (h *HealthcheckService) Ready(ctx context.Context) error {
+	<-h.readyC
 	return nil
 }
 
 func (h *HealthcheckService) Stop(ctx context.Context) error {
+	// Stop all notifiers so they won't send the health notification again.
+	for _, notifier := range h.notifiers {
+		notifier.stop()
+	}
 	return nil
 }
 
 // check directly triggers the healthcheck to the service. This function is exposed to the internal runner because sometimes we need to
 // directly check the service.
 func (h *HealthcheckService) check(ctx context.Context, svc ServiceRunnerAware) (HealthStatus, error) {
-	return h.services[svc].Health(ctx)
+	hc, ok := h.services[svc]
+	// If the service is not implementing the health method, we will just return a healthy status as we don't really
+	// know the status of the service. Maybe we should return status unknown in the future.
+	if !ok {
+		return HealthStatusHealthy, nil
+	}
+	return hc.Health(ctx)
+}
+
+func (h *HealthcheckService) handleNotifications(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case notification := <-h.notifC:
+			for _, consumer := range h.consumers {
+				// For every notification loop we need to check whether the context is cancelled or not. If the context
+				// is already cancelled then we should forget about sending the notifications, because the entire program
+				// will exit anyway.
+				if ctx.Err() != nil {
+					return nil
+				}
+				// Sends the notification to the service that needs the notification.
+				consumer.ConsumeHealthcheckNotification(func(s []string, hcf HealthcheckConsumeFunc) error {
+					// Filter the service name, and only send the notification if it have the service name.
+					var found bool
+					for _, svcName := range s {
+						if notification.ServiceName == svcName {
+							found = true
+							break
+						}
+					}
+					if !found {
+						return nil
+					}
+					hcf(notification)
+					return nil
+				})
+			}
+		}
+	}
+}
+
+func (h *HealthcheckService) handleChecks(ctx context.Context) error {
+	ticker := time.NewTicker(time.Second * 20)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			for _, svc := range h.services {
+				ctxTimeout, cancel := context.WithTimeout(ctx, h.config.Timeout)
+				status, err := svc.Health(ctxTimeout)
+				if err != nil {
+					// TODO: log the failed check.
+				}
+				h.notifC <- HealthcheckNotification{
+					ServiceName:    svc.Name(),
+					Status:         status,
+					CheckTimestamp: time.Now().Unix(),
+					Source:         HealthStatusSourceCheckService,
+				}
+				cancel()
+			}
+		}
+	}
 }
 
 // HealthcheckNotifier notifies the healthcheck service of a given service health status by pushing them. The health service then will

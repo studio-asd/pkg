@@ -26,6 +26,16 @@ type ConcurrentServices struct {
 	stopC  chan struct{}
 }
 
+// BuildConcurrentServices build a new concurrent services so all services inside the concurrent services can be started concurrently. By default, runner
+// runs all the service in FIFO-order.
+//
+// You can use this kind of service if you have some services that need to be started concurrently and beneficial for you to shorten the startup time.
+// In our case, we usually use this service to starts our pub/sub consumers concurrently after all non-trivial services are up.
+func BuildConcurrentServices(runner ServiceRunner, services ...ServiceRunnerAware) (*ConcurrentServices, error) {
+	registrar := runner.(*Registrar)
+	return newConcurrentServices(registrar.runner.logger, services...)
+}
+
 func newConcurrentServices(runnerLogger *slog.Logger, services ...ServiceRunnerAware) (*ConcurrentServices, error) {
 	csvc := &ConcurrentServices{
 		runnerLogger: runnerLogger,
@@ -269,4 +279,13 @@ func (l *LongRunningTask) Stop(ctx context.Context) error {
 	l.stopC <- struct{}{}
 	l.stopMu.Unlock()
 	return nil
+}
+
+// Serve creates a new LongRunningTask that implements ServiceRunnerAware. This allows the user to use runner for trivial usage.
+func Serve(name string, runner ServiceRunner, fn func(ctx context.Context) error) error {
+	lrt, err := NewLongRunningTask(name, fn)
+	if err != nil {
+		return err
+	}
+	return runner.Register(lrt)
 }

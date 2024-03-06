@@ -12,7 +12,6 @@ import (
 	"runtime/debug"
 	"sync"
 	"syscall"
-	"testing"
 	"time"
 
 	"go.opentelemetry.io/otel/metric"
@@ -21,12 +20,15 @@ import (
 )
 
 var (
-	_                              ServiceRunner      = (*Runner)(nil)
-	_                              ServiceRunnerAware = (*LongRunningTask)(nil)
-	_                              ServiceRunnerAware = (*ServiceStateTracker)(nil)
-	gracefulShutdownDefaultTimeout                    = time.Minute * 5
-	serviceReadyDefaultTimeout                        = time.Minute
-	serviceInitDefaultTimeout                         = time.Minute
+	_ ServiceRunner      = (*Registrar)(nil)
+	_ ServiceRunnerAware = (*LongRunningTask)(nil)
+	_ ServiceRunnerAware = (*ServiceStateTracker)(nil)
+)
+
+const (
+	gracefulShutdownDefaultTimeout = time.Minute * 5
+	serviceReadyDefaultTimeout     = time.Minute
+	serviceInitDefaultTimeout      = time.Minute
 )
 
 type serviceState int
@@ -58,7 +60,9 @@ var (
 	errServiceRunnerAlreadyRunning = errors.New("service runner is already running")
 	errGracefulPeriodTimeout       = errors.New("graceful-period timeout")
 	// errRunDeadlineTimeout being thrown when 'SRUN_DEADLINE' is being set and the runner has run beyond the deadline duration.
-	errRunDeadlineTimeout  = errors.New("run deadline timeout reached")
+	errRunDeadlineTimeout = errors.New("run deadline timeout reached")
+	// errServiceInitTimeout is the timeout for initing the service.
+	errServiceInitTimeout  = errors.New("service init timeout reached")
 	errServiceReadyTimeout = errors.New("service ready timeout reached")
 	// errUpgrade is runner internal error when upgrading program. We will use cloudflare/tableflip to trigger exit signal and self-upgrade the binary.
 	errUpgrade = errors.New("upgrade signal triggered, upgrading program")
@@ -126,16 +130,36 @@ type ServiceUpgraderAware interface {
 // interface for the reason above. Usually the implementor of the interface should belong to the other/implementation package.
 type ServiceRunner interface {
 	Register(services ...ServiceRunnerAware) error
-	Serve(name string, fn func(ctx context.Context) error) error
-	BuildConcurrentServices(services ...ServiceRunnerAware) (*ConcurrentServices, error)
 	Context() Context
+}
+
+type Registrar struct {
+	runner  *Runner
+	context Context
+}
+
+func (r *Registrar) Register(services ...ServiceRunnerAware) error {
+	return r.runner.register(services...)
+}
+
+func (r *Registrar) Context() Context {
+	return r.context
+}
+
+func newRegistrar(r *Runner) *Registrar {
+	return &Registrar{
+		runner: r,
+		context: Context{
+			Logger: slog.Default().WithGroup(r.config.ServiceName),
+			Meter:  r.otelMeter,
+			Tracer: r.otelTracer,
+		},
+	}
 }
 
 // Runner implements ServiceRunner.
 type Runner struct {
-	config  *Config
-	context Context
-
+	config      *Config
 	serviceName string
 	// Services is the list of objects that can be controlled by the runner.
 	services []*ServiceStateTracker
@@ -146,16 +170,6 @@ type Runner struct {
 	// ctxSignal is a context to wait for the exit signals.
 	ctxSignal       context.Context
 	ctxSignalCancel func()
-
-	// isInRun is a flag that indicates the runner is being used inside the Run() function.
-	// By default we don't allow some functions to be called from outside and inside Run().
-	//
-	// For example:
-	//	runner := New()
-	//	Run(runner, func(runner ServiceRunner) {
-	//		Run(runner, nil) // This will throw an error.
-	//	})
-	isInRun bool
 
 	// upgrader instance to allow the program to self-upgrade using cloudflare/tableflip.
 	upgrader *upgrader
@@ -170,16 +184,14 @@ type Runner struct {
 
 type Config struct {
 	// ServiceName defines the service name and the pid file name.
-	ServiceName            string
-	Upgrader               UpgraderConfig
-	Admin                  AdminConfig
-	OtelTracer             OTelTracerConfig
-	OtelMetric             OtelMetricConfig
-	Logger                 LoggerConfig
-	Healthcheck            HealthcheckConfig
-	Timeout                TimeoutConfig
-	ReadyTimeout           time.Duration
-	ShutdownGracefulPeriod time.Duration
+	ServiceName string
+	Upgrader    UpgraderConfig
+	Admin       AdminConfig
+	OtelTracer  OTelTracerConfig
+	OtelMetric  OtelMetricConfig
+	Logger      LoggerConfig
+	Healthcheck HealthcheckConfig
+	Timeout     TimeoutConfig
 	// deadlineDuration is the timeout duration for the runner to run. The program will exit with
 	// ErrRunDeadlineTimeout when deadline exceeded.
 	//
@@ -195,11 +207,20 @@ func (c *Config) Validate() error {
 	if c.ServiceName == "" {
 		return errors.New("service name cannot be empty")
 	}
-	if c.ReadyTimeout == 0 {
-		c.ReadyTimeout = serviceReadyDefaultTimeout
+	if c.Timeout.InitTimeout == 0 {
+		c.Timeout.InitTimeout = serviceInitDefaultTimeout
 	}
-	if c.ShutdownGracefulPeriod == 0 {
-		c.ShutdownGracefulPeriod = gracefulShutdownDefaultTimeout
+	if c.Timeout.ReadyTimeout == 0 {
+		c.Timeout.ReadyTimeout = serviceReadyDefaultTimeout
+	}
+	if c.Timeout.ShutdownGracefulPeriod == 0 {
+		c.Timeout.ShutdownGracefulPeriod = gracefulShutdownDefaultTimeout
+	}
+	if c.Healthcheck.Interval == 0 {
+		c.Healthcheck.Interval = healthcheckDefaultInterval
+	}
+	if c.Healthcheck.Timeout == 0 {
+		c.Healthcheck.Timeout = healthcheckDefaultTimeout
 	}
 
 	// Respect the configuration from environment variable if available.
@@ -287,12 +308,8 @@ func New(config Config) *Runner {
 	}
 
 	r := &Runner{
-		serviceName: config.ServiceName,
-		config:      conf,
-		context: Context{
-			Logger: slog.Default().WithGroup(config.ServiceName),
-			Meter:  meter,
-		},
+		serviceName:     config.ServiceName,
+		config:          conf,
 		logger:          slog.Default().WithGroup("service-runner"),
 		ctxSignal:       ctxSignal,
 		ctxSignalCancel: cancel,
@@ -306,11 +323,8 @@ func New(config Config) *Runner {
 	return r
 }
 
-// Register all services that needs to be run and controlled by the service runner.
-func (r *Runner) Register(services ...ServiceRunnerAware) error {
-	if !r.isInRun {
-		return errors.New("register can only be used inside srun.Run() function")
-	}
+// register all services that needs to be run and controlled by the service runner.
+func (r *Runner) register(services ...ServiceRunnerAware) error {
 	if len(services) == 0 {
 		return errors.New("register called with no service provided")
 	}
@@ -387,6 +401,12 @@ func (r *Runner) registerDefaultServices(otelTracerProvider, otelMeterProvider *
 			}
 			r.services = append(r.services, newServiceStateTracker(adminServer, r.logger))
 		}
+		// If the healthcheck is not disabled, then we should spawn a healthcheck service.
+		if !r.config.Healthcheck.Disable {
+			hcs := newHealthcheckService(r.config.Healthcheck)
+			r.services = append(r.services, newServiceStateTracker(hcs, r.logger))
+			r.healthcheckService = hcs
+		}
 		// If the opentelemetry is not disabled, then start the open telemetry process using the long running task.
 		if otelTracerProvider != nil {
 			r.services = append(r.services, newServiceStateTracker(otelTracerProvider, r.logger))
@@ -403,25 +423,10 @@ func (r *Runner) registerDefaultServices(otelTracerProvider, otelMeterProvider *
 	return err
 }
 
-// Serve creates a new LongRunningTask that implements ServiceRunnerAware. This allows the user to use runner for trivial usage.
-func (r *Runner) Serve(name string, fn func(ctx context.Context) error) error {
-	lrt, err := NewLongRunningTask(name, fn)
-	if err != nil {
-		return err
-	}
-	return r.Register(lrt)
-}
-
-// Context returns the service runner context so it can be used by the program.
-func (r *Runner) Context() Context {
-	return r.context
-}
-
 // Run runs the run function that register services in the main function.
 //
 // Please NOTE that the run function should not block, otherwise  the runner can't execute other services that registered in the runner.
 func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) (err error) {
-	r.isInRun = true
 	r.logger.Info(fmt.Sprintf("Running program: %s", r.serviceName))
 
 	var (
@@ -431,8 +436,6 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 
 	// Set the state of the service runner to run/not running and catch panic to enrich the error.
 	defer func() {
-		// Mark the runner to be outside of Run() when exit.
-		r.isInRun = false
 		// Ensure no context is leaking and not cancelled.
 		r.ctxSignalCancel()
 
@@ -466,7 +469,7 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 		r.ctxSignal, r.ctxSignalCancel = context.WithDeadlineCause(r.ctxSignal, time.Now().Add(r.config.DeadlineDuration), errRunDeadlineTimeout)
 	}
 
-	err = run(r.ctxSignal, r)
+	err = run(r.ctxSignal, newRegistrar(r))
 	if err != nil {
 		return
 	}
@@ -535,11 +538,39 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 	// and then grpc-server last.
 	for _, service := range r.services {
 		svc := service
+		// Init the service.
+		initCtx, cancel := context.WithTimeout(r.ctxSignal, r.config.Timeout.InitTimeout)
+		go func() {
+			initContext := Context{
+				Ctx:            initCtx,
+				Logger:         r.logger.WithGroup(svc.Name()),
+				Meter:          r.otelMeter,
+				Tracer:         r.otelTracer,
+				HealthNotifier: &HealthcheckNotifier{noop: true},
+			}
+			if r.healthcheckService != nil {
+				initContext.HealthNotifier = r.healthcheckService.notifiers[svc]
+			}
+			err := svc.Init(initContext)
+			errC <- err
+		}()
+		select {
+		case <-initCtx.Done():
+			cancel()
+			return errServiceInitTimeout
+		case err := <-errC:
+			cancel()
+			if err != nil {
+				return err
+			}
+		}
+		// Run the service.
 		go func(s *ServiceStateTracker) {
 			err := s.Run(r.ctxSignal)
 			errC <- err
 		}(svc)
-
+		// Check whether the service is in ready state or not. We use backoff, because sometimes the goroutines is not scheduled
+		// yet, thus lead to wrong result.
 		readyCheckBackoff := time.Millisecond * 300
 		readyC := make(chan error, 1)
 		// Create a timeout for service readiness as we don't want to wait for too long for unresponsive service.
@@ -578,6 +609,10 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 			}
 		}
 
+		// Don't do any healthcheck if the healthcheck service is disabled.
+		if r.healthcheckService == nil {
+			continue
+		}
 		// Do a firstround of healthcheck after the service is ready as we want to understand the health status of each service.
 		status, err := r.healthcheckService.check(context.Background(), svc)
 		if err != nil {
@@ -638,19 +673,6 @@ func (r *Runner) MustRun(run func(ctx context.Context, runner ServiceRunner) err
 		os.Exit(1)
 	}
 	os.Exit(0)
-}
-
-// BuildConcurrentServices build a new concurrent services so all services inside the concurrent services can be started concurrently. By default, runner
-// runs all the service in FIFO-order.
-//
-// You can use this kind of service if you have some services that need to be started concurrently and beneficial for you to shorten the startup time.
-// In our case, we usually use this service to starts our pub/sub consumers concurrently after all non-trivial services are up.
-func (r *Runner) BuildConcurrentServices(services ...ServiceRunnerAware) (*ConcurrentServices, error) {
-	// Prevent the concurrent services to be created outside of the run function.
-	if !testing.Testing() && !r.isInRun {
-		return nil, errors.New("cannot create concurrent services outside run function")
-	}
-	return newConcurrentServices(r.logger, services...)
 }
 
 // buildContext receive a service runner aware and build a special runner context just for the service.

@@ -27,6 +27,7 @@ func TestConcurrentServices(t *testing.T) {
 		Admin:       AdminConfig{Disable: true},
 		OtelTracer:  OTelTracerConfig{Disable: true},
 		OtelMetric:  OtelMetricConfig{Disable: true},
+		Healthcheck: HealthcheckConfig{Disable: true},
 		Logger: LoggerConfig{
 			Format: LogFormatText,
 			// Log is ordered, so we can ignore the time.
@@ -39,7 +40,8 @@ func TestConcurrentServices(t *testing.T) {
 		lrt1 := newLRT(t, "testing_1", lrtFn1)
 		lrt2 := newLRT(t, "testing_2", lrtFn2)
 		lrt3 := newLRT(t, "testing_3", lrtFn3)
-		svc, err := r.BuildConcurrentServices(
+		svc, err := BuildConcurrentServices(
+			newRegistrar(r),
 			lrt1,
 			lrt2,
 			lrt3,
@@ -62,7 +64,8 @@ func TestConcurrentServices(t *testing.T) {
 		lrt1 := newLRT(t, "testing_1", lrtFn1)
 		lrt2 := newLRT(t, "testing_2", lrtFn2)
 		lrt3 := newLRT(t, "testing_3", lrtFn3)
-		svc, err := r.BuildConcurrentServices(
+		svc, err := BuildConcurrentServices(
+			newRegistrar(r),
 			lrt1,
 			lrt2,
 			lrt3,
@@ -126,7 +129,8 @@ func TestConcurrentServices(t *testing.T) {
 		lrt1 := newLRT(t, "testing_1", lrtFn1)
 		lrt2 := newLRT(t, "testing_2", lrtFn2)
 		lrt3 := newLRT(t, "testing_3", lrtFn3)
-		svc, err := r.BuildConcurrentServices(
+		svc, err := BuildConcurrentServices(
+			newRegistrar(r),
 			lrt1,
 			lrt2,
 			lrt3,
@@ -197,7 +201,8 @@ func TestConcurrentServices(t *testing.T) {
 		lrt1 := newLRT(t, "testing_1", lrtFn1)
 		lrt2 := newLRT(t, "testing_2", lrtFn2)
 		lrt3 := newLRT(t, "testing_3", lrtFn3)
-		svc, err := r.BuildConcurrentServices(
+		svc, err := BuildConcurrentServices(
+			newRegistrar(r),
 			lrt1,
 			lrt2,
 			lrt3,
