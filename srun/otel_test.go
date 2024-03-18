@@ -11,6 +11,7 @@ import (
 )
 
 func TestOtelTracer(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name       string
 		config     OTelTracerConfig
@@ -39,6 +40,7 @@ func TestOtelTracer(t *testing.T) {
 	for _, test := range tests {
 		tt := test
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			tracer, task, err := newOTelTracerService(tt.config)
 			if err != tt.err {
 				t.Fatalf("expecting error %v but got %v", tt.err, err)
@@ -66,6 +68,7 @@ func TestOtelTracer(t *testing.T) {
 }
 
 func TestOtelMeter(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		config    OtelMetricConfig
@@ -94,6 +97,7 @@ func TestOtelMeter(t *testing.T) {
 	for _, test := range tests {
 		tt := test
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			tracer, task, err := newOtelMetricMeterAndProviderService(tt.config)
 			if err != tt.err {
 				t.Fatalf("expecting error %v but got %v", tt.err, err)

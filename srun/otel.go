@@ -2,6 +2,7 @@ package srun
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -59,9 +60,19 @@ func newOTelTracerService(config OTelTracerConfig) (trace.Tracer, *LongRunningTa
 	)
 	tracer := provider.Tracer(config.serviceName)
 
-	fn := func(ctx context.Context) error {
-		<-ctx.Done()
-		return provider.Shutdown(context.Background())
+	fn := func(ctx Context) error {
+		<-ctx.Ctx.Done()
+
+		ctxTimeout, cancel := context.WithTimeout(context.Background(), time.Second*30)
+		defer cancel()
+		// Forcefully flush all registered spans before shutdown to ensure we are sending all traces.
+		if err := provider.ForceFlush(ctxTimeout); err != nil {
+			ctx.Logger.Error(
+				"failed to flush otel-traces",
+				slog.String("error", err.Error()),
+			)
+		}
+		return provider.Shutdown(ctxTimeout)
 	}
 	task, err := NewLongRunningTask("otel-tracer-listener", fn)
 	if err != nil {
@@ -104,10 +115,20 @@ func newOtelMetricMeterAndProviderService(config OtelMetricConfig) (metric.Meter
 		),
 	)
 
-	providerTask, err := NewLongRunningTask("otel-metric-provider", func(ctx context.Context) error {
+	providerTask, err := NewLongRunningTask("otel-metric-provider", func(ctx Context) error {
 		// Wait until the context is cancalled to shutdown the provider.
-		<-ctx.Done()
-		return provider.Shutdown(ctx)
+		<-ctx.Ctx.Done()
+
+		ctxTimeout, cancel := context.WithTimeout(context.Background(), time.Second*30)
+		defer cancel()
+		// Forcefully flush all pending telemetry before shutdown to ensure we are sending all telemetries.
+		if err := provider.ForceFlush(ctxTimeout); err != nil {
+			ctx.Logger.Error(
+				"failed to flush otel-telemetry",
+				slog.String("error", err.Error()),
+			)
+		}
+		return provider.Shutdown(ctxTimeout)
 	})
 	if err != nil {
 		return nil, nil, err

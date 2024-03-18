@@ -15,15 +15,15 @@ func TestCreateRequest(t *testing.T) {
 		handler     func(t *testing.T) http.Handler
 	}{
 		{
-			"simple post http request",
-			func(name, url string, req *Request) {
+			name: "simple post http request",
+			constructor: func(name, url string, req *Request) {
 				req.Name(name).
 					Get(url).
 					Header(http.Header{
 						"Content-Type": []string{"application/json"},
 					})
 			},
-			func(t *testing.T) http.Handler {
+			handler: func(t *testing.T) http.Handler {
 				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if r.Method != http.MethodGet {
 						t.Fatalf("expecting method GET but got %s", r.Method)

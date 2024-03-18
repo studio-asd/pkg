@@ -32,6 +32,7 @@ package srun
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -150,7 +151,7 @@ type HealthcheckNotification struct {
 }
 
 type HealthcheckConfig struct {
-	Disable  bool
+	Enabled  bool
 	Timeout  time.Duration
 	Interval time.Duration
 }
@@ -166,6 +167,7 @@ type HealthcheckConfig struct {
 //     The check woerker is used to periodically checks the services healthcheck and send the result to the notification channel.
 type HealthcheckService struct {
 	config HealthcheckConfig
+	iCtx   Context
 	notifC chan HealthcheckNotification
 	// noifiers is the healthcheck notifier for all services. We provide the notifier for all services because ther might
 	// be a service that won't consume the notification but they need to send the notification. For example a service that
@@ -174,10 +176,11 @@ type HealthcheckService struct {
 	notifiers map[ServiceRunnerAware]*HealthcheckNotifier
 	// services is the list of services that need checks.
 	services map[ServiceRunnerAware]Healthcheck
+	// servicesStatus is a map based on service name to track the health status of eaach services.
+	servicesStatus map[string]*ServiceHealthStatus
 	// consumers is the consumers of the healthcheck notification. We are using a concurrent services to start the
 	// all the consumers.
-	consumers        []HealthcheckConsumer
-	consumersService *ConcurrentServices
+	consumers []HealthcheckConsumer
 	// broadcastC is the healthcheck notification channel. The number of channel will be the same with the number of consumers
 	// as this channel acted as the multiplexer to all consumers(all consumers will receive the same message). We don't create
 	// the channel for all services because it is pointeless to provide the notification for a service without consumer.
@@ -188,15 +191,11 @@ type HealthcheckService struct {
 
 func newHealthcheckService(config HealthcheckConfig) *HealthcheckService {
 	hcs := &HealthcheckService{
-		config:    config,
-		services:  make(map[ServiceRunnerAware]Healthcheck),
-		notifiers: make(map[ServiceRunnerAware]*HealthcheckNotifier),
-		readyC:    make(chan struct{}, 1),
-	}
-	if !config.Disable {
-		ccs, _ := newConcurrentServices(nil)
-		hcs.consumersService = ccs
-		hcs.notifC = make(chan HealthcheckNotification, 100)
+		config:         config,
+		services:       make(map[ServiceRunnerAware]Healthcheck),
+		servicesStatus: make(map[string]*ServiceHealthStatus),
+		notifiers:      make(map[ServiceRunnerAware]*HealthcheckNotifier),
+		readyC:         make(chan struct{}, 1),
 	}
 	return hcs
 }
@@ -225,20 +224,20 @@ func (h *HealthcheckService) register(svc ServiceRunnerAware) error {
 
 	hcf := &HealthcheckNotifier{
 		serviceName: svc.Name(),
-		noop:        h.config.Disable,
+		noop:        !h.config.Enabled,
 		notifyC:     h.notifC,
 	}
 
 	// Don't build or track anything else if the healthcheck is disabled.
-	if !h.config.Disable {
+	if h.config.Enabled {
 		hc, ok := svc.(Healthcheck)
 		if ok {
 			h.services[svc] = hc
+			h.servicesStatus[svc.Name()] = &ServiceHealthStatus{status: HealthStatusStopped}
 		}
 		hcc, ok := svc.(HealthcheckConsumer)
 		if ok {
 			notifC := make(chan HealthcheckNotification, 100)
-			h.consumersService.Register(svc)
 			h.consumers = append(h.consumers, hcc)
 			h.broadcastC = append(h.broadcastC, notifC)
 		}
@@ -252,6 +251,10 @@ func (h *HealthcheckService) Name() string {
 }
 
 func (h *HealthcheckService) Init(ctx Context) error {
+	if h.config.Enabled {
+		h.notifC = make(chan HealthcheckNotification, len(h.services)*50)
+	}
+	h.iCtx = ctx
 	return nil
 }
 
@@ -301,11 +304,20 @@ func (h *HealthcheckService) check(ctx context.Context, svc ServiceRunnerAware) 
 }
 
 func (h *HealthcheckService) handleNotifications(ctx context.Context) error {
+	// svcFilter is a map filter for every healthcheckConsumer, so we are not looping all filters all over again in every notification.
+	// Please NOTE that this approach is not concurrently safe, but its okay for now as we only use it in a single loop.
+	svcFilter := make(map[HealthcheckConsumer]map[string]bool)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case notification := <-h.notifC:
+			// Set the latest status of the service. If the service is somehow miss to publish the notification upon recovery, the healthcheck
+			// will still send the periodic notification. So we might see some delay, but we will eventually get the correct status.
+			if s, ok := h.servicesStatus[notification.ServiceName]; ok {
+				s.Set(notification.Status)
+			}
+
 			for _, consumer := range h.consumers {
 				// For every notification loop we need to check whether the context is cancelled or not. If the context
 				// is already cancelled then we should forget about sending the notifications, because the entire program
@@ -315,16 +327,33 @@ func (h *HealthcheckService) handleNotifications(ctx context.Context) error {
 				}
 				// Sends the notification to the service that needs the notification.
 				consumer.ConsumeHealthcheckNotification(func(s []string, hcf HealthcheckConsumeFunc) error {
-					// Filter the service name, and only send the notification if it have the service name.
-					var found bool
-					for _, svcName := range s {
-						if notification.ServiceName == svcName {
-							found = true
-							break
-						}
-					}
-					if !found {
+					// If there are no services to listen to, then we should just exit.
+					if len(s) == 0 {
 						return nil
+					}
+					// Fast path, check whether the services is exists in the service filter index.
+					if _, ok := svcFilter[consumer]; ok && !svcFilter[consumer][notification.ServiceName] {
+						return nil
+					}
+					// Slow path, check and index all services by looping the filters.
+					if _, ok := svcFilter[consumer]; !ok {
+						// Fill the service filter for a given consumer with all services.
+						svcFilter[consumer] = make(map[string]bool)
+						// Filter the service name, and only send the notification if it have the service name.
+						var found bool
+						for _, svcName := range s {
+							// Don't track service with empty name. Maybe we should warn the client.
+							if svcName == "" {
+								continue
+							}
+							svcFilter[consumer][svcName] = true
+							if notification.ServiceName == svcName {
+								found = true
+							}
+						}
+						if !found {
+							return nil
+						}
 					}
 					hcf(notification)
 					return nil
@@ -345,7 +374,11 @@ func (h *HealthcheckService) handleChecks(ctx context.Context) error {
 				ctxTimeout, cancel := context.WithTimeout(ctx, h.config.Timeout)
 				status, err := svc.Health(ctxTimeout)
 				if err != nil {
-					// TODO: log the failed check.
+					h.iCtx.Logger.Error(
+						"healthcheck failed",
+						slog.String("service_name", svc.Name()),
+						slog.String("error", err.Error()),
+					)
 				}
 				h.notifC <- HealthcheckNotification{
 					ServiceName:    svc.Name(),
@@ -393,4 +426,23 @@ func (h *HealthcheckNotifier) stop() {
 	h.mu.Lock()
 	h.noop = true
 	h.mu.Unlock()
+}
+
+// ServiceHealthStatus tracks the health status of each service. The set and get of health status is concurrently safe.
+type ServiceHealthStatus struct {
+	mu     sync.RWMutex
+	status HealthStatus
+}
+
+func (s *ServiceHealthStatus) Set(status HealthStatus) {
+	s.mu.Lock()
+	s.status = status
+	s.mu.Unlock()
+}
+
+func (s *ServiceHealthStatus) Get() (status HealthStatus) {
+	s.mu.RLock()
+	status = s.status
+	s.mu.RUnlock()
+	return
 }

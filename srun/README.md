@@ -4,7 +4,7 @@ Service runner is a helper and steroid for `func main()` so the program can corr
 
 The motivation to create the service runner coming from our usecase of running a large Go monolith on top of VM using `systemd`. Inside the applications, we have a lot of modules with some backgrund processes that we called `service`. Previously we are trying to manage all of the services one by one, and with this our code complexity bloats. After sometime we decided to create a `service operator` package on top of our services to reduce the code complexity.
 
-By using this package, it doesn't mean you don't need to manage the state and correctness inside your own package or `service`. You still to maintain them by correctly use all the functions provided by this package. For example, to shutdown a http server you still need to call `http.Server{}.Shutdown()` inside the `Stop` method.
+By using this package, it doesn't mean you won't need to manage the states and correctness inside your own package or `service`. You still to maintain them by correctly use all the functions provided by this package. For example, to shutdown a http server you still need to call `http.Server{}.Shutdown()` inside the `Stop` method.
 
 ## Requirements
 
@@ -152,7 +152,9 @@ Service runner provides several default services to help the user running a Go p
 
 The service runner provides healthcheck to all services so we are able to indentify all the services statuses at one time. It provides `active` and `passive` healthcheck and allows services to consumes the check notifications.
 
-But what it means by `active` and `passive` healthcheck?
+By default, the healthcheck is disabled and you must enabled it manually by enabling it in the `srun` configuration. When the healthcheck is enabled, and the service is started, it will automatically runs two long-running `goroutines` to tracks the `services` health inside `srun`.
+
+What it means by `active` and `passive` healthcheck?
 
 **Active**
 

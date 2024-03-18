@@ -63,7 +63,7 @@ func TestRunReturn(t *testing.T) {
 		{
 			name: "run deadline",
 			run: func(ctx context.Context, r ServiceRunner) error {
-				return Serve("run-readline-service", r, func(ctx context.Context) error {
+				return Serve("run-readline-service", r, func(ctx Context) error {
 					time.Sleep(time.Second * 5)
 					return nil
 				})
@@ -82,7 +82,7 @@ func TestRunReturn(t *testing.T) {
 		{
 			name: "graceful timeout",
 			run: func(ctx context.Context, r ServiceRunner) error {
-				return Serve("run-graceful-timeout", r, func(ctx context.Context) error {
+				return Serve("run-graceful-timeout", r, func(ctx Context) error {
 					time.Sleep(time.Second * 5)
 					return nil
 				})
@@ -117,9 +117,6 @@ func TestRunReturn(t *testing.T) {
 				OtelMetric: OtelMetricConfig{
 					Disable: true,
 				},
-				Healthcheck: HealthcheckConfig{
-					Disable: true,
-				},
 			}
 			err := New(conf).Run(tt.run)
 			tt.expect(t, err)
@@ -136,10 +133,9 @@ func TestGracefulShutdown(t *testing.T) {
 			Admin:       AdminConfig{Disable: true},
 			OtelTracer:  OTelTracerConfig{Disable: true},
 			OtelMetric:  OtelMetricConfig{Disable: true},
-			Healthcheck: HealthcheckConfig{Disable: true},
 		}
 		err := New(config).Run(func(ctx context.Context, runner ServiceRunner) error {
-			return Serve("testing", runner, func(ctx context.Context) error {
+			return Serve("testing", runner, func(ctx Context) error {
 				time.Sleep(time.Second)
 				return nil
 			})
@@ -155,13 +151,12 @@ func TestGracefulShutdown(t *testing.T) {
 			ServiceName: "testing_graceful_shutdown_timeout",
 			Admin:       AdminConfig{Disable: true},
 			OtelTracer:  OTelTracerConfig{Disable: true},
-			Healthcheck: HealthcheckConfig{Disable: true},
 			Timeout: TimeoutConfig{
 				ShutdownGracefulPeriod: time.Second,
 			},
 		}
 		err := New(config).Run(func(ctx context.Context, runner ServiceRunner) error {
-			return Serve("testing", runner, func(ctx context.Context) error {
+			return Serve("testing", runner, func(ctx Context) error {
 				time.Sleep(time.Second * 5)
 				return nil
 			})
@@ -202,7 +197,6 @@ level=INFO msg="[Service] testing_1: STOPPED"
 		Admin:       AdminConfig{Disable: true},
 		OtelTracer:  OTelTracerConfig{Disable: true},
 		OtelMetric:  OtelMetricConfig{Disable: true},
-		Healthcheck: HealthcheckConfig{Disable: true},
 		Logger: LoggerConfig{
 			Format: LogFormatText,
 			Output: buff,
@@ -211,19 +205,19 @@ level=INFO msg="[Service] testing_1: STOPPED"
 		},
 	}
 	err := New(config).Run(func(ctx context.Context, runner ServiceRunner) error {
-		if err := Serve("testing_1", runner, func(ctx context.Context) error {
+		if err := Serve("testing_1", runner, func(ctx Context) error {
 			time.Sleep(time.Second)
 			return nil
 		}); err != nil {
 			return err
 		}
-		if err := Serve("testing_2", runner, func(ctx context.Context) error {
+		if err := Serve("testing_2", runner, func(ctx Context) error {
 			time.Sleep(time.Second)
 			return nil
 		}); err != nil {
 			return err
 		}
-		if err := Serve("testing_3", runner, func(ctx context.Context) error {
+		if err := Serve("testing_3", runner, func(ctx Context) error {
 			time.Sleep(time.Second)
 			return nil
 		}); err != nil {

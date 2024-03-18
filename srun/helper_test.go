@@ -9,15 +9,15 @@ import (
 )
 
 func TestConcurrentServices(t *testing.T) {
-	lrtFn1 := func(ctx context.Context) error {
+	lrtFn1 := func(ctx Context) error {
 		time.Sleep(time.Second * 3)
 		return nil
 	}
-	lrtFn2 := func(ctx context.Context) error {
+	lrtFn2 := func(ctx Context) error {
 		time.Sleep(time.Second * 3)
 		return nil
 	}
-	lrtFn3 := func(ctx context.Context) error {
+	lrtFn3 := func(ctx Context) error {
 		time.Sleep(time.Second * 3)
 		return nil
 	}
@@ -27,7 +27,6 @@ func TestConcurrentServices(t *testing.T) {
 		Admin:       AdminConfig{Disable: true},
 		OtelTracer:  OTelTracerConfig{Disable: true},
 		OtelMetric:  OtelMetricConfig{Disable: true},
-		Healthcheck: HealthcheckConfig{Disable: true},
 		Logger: LoggerConfig{
 			Format: LogFormatText,
 			// Log is ordered, so we can ignore the time.
@@ -298,7 +297,7 @@ func TestConcurrentServices(t *testing.T) {
 func TestLongRunningTask(t *testing.T) {
 	tests := []struct {
 		name    string
-		task    func(ctx context.Context) error
+		task    func(ctx Context) error
 		runCtx  context.Context
 		runErr  error
 		stopCtx func() (context.Context, context.CancelFunc)
@@ -306,7 +305,7 @@ func TestLongRunningTask(t *testing.T) {
 	}{
 		{
 			name: "run, wait for exit",
-			task: func(ctx context.Context) error {
+			task: func(ctx Context) error {
 				time.Sleep(time.Second)
 				return nil
 			},
@@ -315,7 +314,7 @@ func TestLongRunningTask(t *testing.T) {
 		},
 		{
 			name: "run, wait for graceful",
-			task: func(ctx context.Context) error {
+			task: func(ctx Context) error {
 				time.Sleep(time.Second)
 				return nil
 			},
@@ -328,7 +327,7 @@ func TestLongRunningTask(t *testing.T) {
 		},
 		{
 			name: "run, stop deadline exceeded",
-			task: func(ctx context.Context) error {
+			task: func(ctx Context) error {
 				time.Sleep(time.Second)
 				return nil
 			},
@@ -372,7 +371,7 @@ func TestLongRunningTask(t *testing.T) {
 	}
 }
 
-func newLRT(t *testing.T, name string, fn func(context.Context) error) *LongRunningTask {
+func newLRT(t *testing.T, name string, fn func(Context) error) *LongRunningTask {
 	t.Helper()
 
 	lrt, err := NewLongRunningTask(name, fn)

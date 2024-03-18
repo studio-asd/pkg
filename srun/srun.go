@@ -402,7 +402,7 @@ func (r *Runner) registerDefaultServices(otelTracerProvider, otelMeterProvider *
 			r.services = append(r.services, newServiceStateTracker(adminServer, r.logger))
 		}
 		// If the healthcheck is not disabled, then we should spawn a healthcheck service.
-		if !r.config.Healthcheck.Disable {
+		if r.config.Healthcheck.Enabled {
 			hcs := newHealthcheckService(r.config.Healthcheck)
 			r.services = append(r.services, newServiceStateTracker(hcs, r.logger))
 			r.healthcheckService = hcs

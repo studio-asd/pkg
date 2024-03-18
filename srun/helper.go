@@ -154,7 +154,7 @@ func (c *ConcurrentServices) Stop(ctx context.Context) error {
 }
 
 // NewLongRunningTask creates long running task with a name.
-func NewLongRunningTask(name string, fn func(ctx context.Context) error) (*LongRunningTask, error) {
+func NewLongRunningTask(name string, fn func(ctx Context) error) (*LongRunningTask, error) {
 	if name == "" {
 		return nil, errors.New("name cannot be empty")
 	}
@@ -178,12 +178,13 @@ func NewLongRunningTask(name string, fn func(ctx context.Context) error) (*LongR
 // Implements ServiceRunnerAware interface.
 type LongRunningTask struct {
 	name string
+	iCtx Context
 
 	errMu sync.Mutex
 	err   error
 	// readyC is used to notify that long running task is ready and running.
 	readyC chan struct{}
-	fn     func(ctx context.Context) error
+	fn     func(ctx Context) error
 	// delayReady is used to delay the ready notification
 	delayrReady time.Duration
 
@@ -201,7 +202,8 @@ func (l *LongRunningTask) Name() string {
 }
 
 // Init does nothing in the long-running-task as it only wraps function.
-func (l *LongRunningTask) Init(Context) error {
+func (l *LongRunningTask) Init(ctx Context) error {
+	l.iCtx = ctx
 	return nil
 }
 
@@ -217,7 +219,13 @@ func (l *LongRunningTask) Run(ctx context.Context) error {
 
 	errC := make(chan error, 1)
 	go func() {
-		errC <- l.fn(cancelCtx)
+		errC <- l.fn(Context{
+			Ctx:            cancelCtx,
+			Logger:         l.iCtx.Logger,
+			Meter:          l.iCtx.Meter,
+			Tracer:         l.iCtx.Tracer,
+			HealthNotifier: l.iCtx.HealthNotifier,
+		})
 	}()
 	// As of now we don't have any way to tell whether the process is running or not other than waiting
 	// for a certain duration of time and mark the task as ready.
@@ -282,7 +290,7 @@ func (l *LongRunningTask) Stop(ctx context.Context) error {
 }
 
 // Serve creates a new LongRunningTask that implements ServiceRunnerAware. This allows the user to use runner for trivial usage.
-func Serve(name string, runner ServiceRunner, fn func(ctx context.Context) error) error {
+func Serve(name string, runner ServiceRunner, fn func(ctx Context) error) error {
 	lrt, err := NewLongRunningTask(name, fn)
 	if err != nil {
 		return err

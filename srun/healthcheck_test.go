@@ -10,6 +10,8 @@ import (
 )
 
 func TestHealthcheckRegister(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		config   HealthcheckConfig
@@ -18,8 +20,11 @@ func TestHealthcheckRegister(t *testing.T) {
 	}{
 		{
 			name: "long running task",
+			config: HealthcheckConfig{
+				Enabled: true,
+			},
 			services: func() []ServiceRunnerAware {
-				lrt, _ := NewLongRunningTask("test-lrt", func(ctx context.Context) error { return nil })
+				lrt, _ := NewLongRunningTask("test-lrt", func(ctx Context) error { return nil })
 				return []ServiceRunnerAware{lrt}
 			},
 			expect: func(config HealthcheckConfig, services ...ServiceRunnerAware) *HealthcheckService {
@@ -27,7 +32,7 @@ func TestHealthcheckRegister(t *testing.T) {
 				for _, svc := range services {
 					hcs.notifiers[svc] = &HealthcheckNotifier{
 						serviceName: svc.Name(),
-						noop:        config.Disable,
+						noop:        !config.Enabled,
 						notifyC:     hcs.notifC,
 					}
 				}
@@ -37,9 +42,9 @@ func TestHealthcheckRegister(t *testing.T) {
 		{
 			name: "concurrent service",
 			services: func() []ServiceRunnerAware {
-				lrt1, _ := NewLongRunningTask("test-lrt-1", func(ctx context.Context) error { return nil })
-				lrt2, _ := NewLongRunningTask("test-lrt-2", func(ctx context.Context) error { return nil })
-				lrt3, _ := NewLongRunningTask("test-lrt-3", func(ctx context.Context) error { return nil })
+				lrt1, _ := NewLongRunningTask("test-lrt-1", func(ctx Context) error { return nil })
+				lrt2, _ := NewLongRunningTask("test-lrt-2", func(ctx Context) error { return nil })
+				lrt3, _ := NewLongRunningTask("test-lrt-3", func(ctx Context) error { return nil })
 				cr, err := newConcurrentServices(nil, lrt1, lrt2, lrt3)
 				if err != nil {
 					panic(err)
@@ -53,7 +58,7 @@ func TestHealthcheckRegister(t *testing.T) {
 				for _, svc := range cs.services {
 					hcs.notifiers[svc.ServiceRunnerAware] = &HealthcheckNotifier{
 						serviceName: svc.Name(),
-						noop:        config.Disable,
+						noop:        !config.Enabled,
 						notifyC:     hcs.notifC,
 					}
 				}
@@ -64,6 +69,7 @@ func TestHealthcheckRegister(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			hcs := newHealthcheckService(test.config)
 			services := test.services()
 			for _, svc := range services {
@@ -126,7 +132,11 @@ func (t *TestHealthcheckNotif) ConsumeHealthcheckNotification(fn HealthcheckNoti
 }
 
 func TestHandleNotifications(t *testing.T) {
-	hs := newHealthcheckService(HealthcheckConfig{})
+	t.Parallel()
+	hs := newHealthcheckService(HealthcheckConfig{Enabled: true})
+	if err := hs.Init(Context{}); err != nil {
+		t.Fatal(err)
+	}
 	if err := hs.register(&TestHealthcheckNotif{}); err != nil {
 		t.Fatal(err)
 	}
