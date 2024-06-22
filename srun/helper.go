@@ -32,7 +32,10 @@ type ConcurrentServices struct {
 // You can use this kind of service if you have some services that need to be started concurrently and beneficial for you to shorten the startup time.
 // In our case, we usually use this service to starts our pub/sub consumers concurrently after all non-trivial services are up.
 func BuildConcurrentServices(runner ServiceRunner, services ...ServiceRunnerAware) (*ConcurrentServices, error) {
-	registrar := runner.(*Registrar)
+	registrar, ok := runner.(*Registrar)
+	if !ok {
+		return nil, errors.New("the service runner type must be *Registrar")
+	}
 	return newConcurrentServices(registrar.runner.logger, services...)
 }
 
@@ -102,7 +105,7 @@ func (c *ConcurrentServices) Run(ctx context.Context) (err error) {
 	for {
 		err = <-errC
 		errCount++
-		// Wait until all services stopped
+		// Wait until all services stopped.
 		if err == nil && errCount < len(c.services) {
 			continue
 		}

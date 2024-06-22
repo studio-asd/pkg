@@ -1,5 +1,10 @@
 // Postgres is a compatibility layer between pgx and database/sql.
 // This package also provide a pure pgx object if pgx is used.
+//
+// The library used pgxpool by default because pgxconn is not concurrently safe
+// to be used by default. Pgxpool is a client-side connection pool implementation
+// and not to be confused with something like PgBouncer. It is safe to use PgBouncer
+// on top of pgxpool.
 
 package postgres
 
@@ -10,13 +15,13 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/lib/pq"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 const (
@@ -81,7 +86,7 @@ func (c *ConnectConfig) validate() error {
 func (c *ConnectConfig) DSN() (url string, dsn map[string]string, err error) {
 	url = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s", c.Username, c.Password, c.Host, c.Port, c.DBName, c.SSLMode)
 	if c.SearchPath != "" {
-		url = url + "&searchPath=" + c.SearchPath
+		url = url + "&search_path=" + c.SearchPath
 	}
 	dsn, err = PostgresDSN(url)
 	return
@@ -100,14 +105,6 @@ type Postgres struct {
 	// closeMu protects closing postgres connection concurrently.
 	closeMu sync.Mutex
 	closed  bool
-
-	// originConn is the origin connection of a fork. This connection will be used in the case
-	// of closing a connection and destroying the new schema.
-	originConn *Postgres
-	// cloneOnce is used to ensure the clone.sql to be applied once in a database.
-	// The forked connection will use the same cloneOnce from previous so it won't
-	// apply the function again.
-	cloneOnce *sync.Once
 }
 
 // InTransaction returns whether the postgres object is currently in transaction or not. The information need to be
@@ -129,14 +126,18 @@ func Connect(ctx context.Context, connConfig ConnectConfig) (*Postgres, error) {
 	}
 
 	var (
-		db    *sql.DB
-		pgxdb *pgxpool.Pool
-		err   error
+		db     *sql.DB
+		pgxdb  *pgxpool.Pool
+		err    error
+		tracer = noop.NewTracerProvider().Tracer("postgres")
 	)
 
 	url, _, err := config.DSN()
 	if err != nil {
 		return nil, err
+	}
+	if config.Tracer != nil {
+		tracer = config.Tracer
 	}
 
 	switch config.Driver {
@@ -152,23 +153,21 @@ func Connect(ctx context.Context, connConfig ConnectConfig) (*Postgres, error) {
 			return nil, err
 		}
 		poolConfig.MaxConns = int32(config.MaxOpenConns)
-		// Use the open telemetry tracer if tracer is not empty.
-		if config.Tracer != nil {
-			poolConfig.ConnConfig.Tracer = &PgxQueryTracer{
-				dbInfo: struct {
-					user    string
-					host    string
-					port    string
-					dbName  string
-					sslMode string
-				}{
-					user:    config.Username,
-					host:    config.Host,
-					port:    config.Port,
-					dbName:  config.DBName,
-					sslMode: config.SSLMode,
-				},
-			}
+		poolConfig.ConnConfig.Tracer = &PgxQueryTracer{
+			tracer: tracer,
+			dbInfo: struct {
+				user    string
+				host    string
+				port    string
+				dbName  string
+				sslMode string
+			}{
+				user:    config.Username,
+				host:    config.Host,
+				port:    config.Port,
+				dbName:  config.DBName,
+				sslMode: config.SSLMode,
+			},
 		}
 
 		pgxdb, err = pgxpool.NewWithConfig(context.Background(), poolConfig)
@@ -182,7 +181,6 @@ func Connect(ctx context.Context, connConfig ConnectConfig) (*Postgres, error) {
 		db:         db,
 		pgx:        pgxdb,
 		searchPath: "public",
-		cloneOnce:  &sync.Once{},
 	}
 	return p, nil
 }
@@ -192,6 +190,10 @@ func (p *Postgres) Query(ctx context.Context, query string, params ...any) (*Row
 }
 
 func (p *Postgres) query(ctx context.Context, query string, params ...any) (*RowsCompat, error) {
+	if p.tx != nil {
+		return p.tx.Query(ctx, query, params...)
+	}
+
 	if p.pgx != nil {
 		rows, err := p.pgx.Query(ctx, query, params...)
 		if err != nil {
@@ -221,6 +223,10 @@ func (p *Postgres) RunQuery(ctx context.Context, query string, f func(*RowsCompa
 }
 
 func (p *Postgres) QueryRow(ctx context.Context, query string, params ...any) *RowCompat {
+	if p.tx != nil {
+		return p.tx.QueryRow(ctx, query, params...)
+	}
+
 	if p.pgx != nil {
 		row := p.pgx.QueryRow(ctx, query, params...)
 		return &RowCompat{pgxRow: row}
@@ -230,6 +236,10 @@ func (p *Postgres) QueryRow(ctx context.Context, query string, params ...any) *R
 }
 
 func (p *Postgres) Exec(ctx context.Context, query string, params ...any) (*ExecResultCompat, error) {
+	if p.tx != nil {
+		return p.tx.Exec(ctx, query, params...)
+	}
+
 	if p.pgx != nil {
 		tag, err := p.pgx.Exec(ctx, query, params...)
 		if err != nil {
@@ -249,6 +259,9 @@ func (p *Postgres) Exec(ctx context.Context, query string, params ...any) (*Exec
 type Transaction interface {
 	Rollback() error
 	Commit() error
+	Exec(ctx context.Context, query string, params ...any) (*ExecResultCompat, error)
+	QueryRow(ctx context.Context, query string, params ...any) *RowCompat
+	Query(ctx context.Context, query string, params ...any) (*RowsCompat, error)
 }
 
 func (p *Postgres) Transact(ctx context.Context, iso sql.IsolationLevel, txFunc func(*Postgres) error) error {
@@ -272,10 +285,11 @@ func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc 
 		}
 		tx = &TransactCompat{pgxTx: pgxTx}
 	} else {
-		tx, err = p.db.BeginTx(ctx, &sql.TxOptions{Isolation: iso})
+		stdlibTx, err := p.db.BeginTx(ctx, &sql.TxOptions{Isolation: iso})
 		if err != nil {
 			return err
 		}
+		tx = &TransactCompat{tx: stdlibTx}
 	}
 
 	// Create a new copy of Postgres and add the transaction object inside the object. This will make InTransaction() check to be true.
@@ -290,10 +304,11 @@ func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc 
 	err = txFunc(newPG)
 	if err != nil {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			rollbackErr = fmt.Errorf("failed to rollback: %w", rollbackErr)
 			// Rollback error is a different error, join the error with the actual error.
 			err = errors.Join(err, rollbackErr)
 		}
-		return fmt.Errorf("failed to rollback: %w", err)
+		return err
 	}
 	err = tx.Commit()
 	if err != nil {
@@ -323,7 +338,7 @@ func (p *Postgres) Ping(ctx context.Context) error {
 // setDefaultSearchPath sets the default schema for the current connection.
 func (p *Postgres) setDefaultSearchPath(ctx context.Context, schemaName string) error {
 	query := fmt.Sprintf("SET search_path TO %s;", schemaName)
-	_, err := p.Exec(context.Background(), query)
+	_, err := p.Exec(ctx, query)
 	if err != nil {
 		return err
 	}
@@ -341,6 +356,10 @@ func (p *Postgres) SearchPath() []string {
 	return paths
 }
 
+func (p *Postgres) DefaultSearchPath() string {
+	return p.SearchPath()[0]
+}
+
 func (p *Postgres) Close() (err error) {
 	p.closeMu.Lock()
 	if p.closed {
@@ -353,9 +372,7 @@ func (p *Postgres) Close() (err error) {
 			p.closeMu.Unlock()
 			return
 		}
-
 		p.closed = true
-		clean(p)
 		p.closeMu.Unlock()
 	}()
 
@@ -365,38 +382,6 @@ func (p *Postgres) Close() (err error) {
 	}
 	err = p.db.Close()
 	return
-}
-
-// clean cleans the schema by deleting the schema if we know the current connection is forked.
-// The reason of why we clean the schema here is, usually the new schema is used in a
-// local function test and not via global variable. So this means when the connection is closed
-// we don't need the schema anymore as our test have been completed.
-func clean(p *Postgres) {
-	if !testing.Testing() {
-		return
-	}
-	if p.originConn == nil {
-		return
-	}
-
-	var connErr error
-	var newConn bool
-
-	conn := p.originConn
-	if conn.closed {
-		conf := *p.originConn.config
-		conn, connErr = Connect(context.Background(), conf)
-		if connErr != nil {
-			return
-		}
-		newConn = true
-	}
-	// Do best effort attempt to drop the schema.
-	dropSchemaQuery := fmt.Sprintf("DROP SCHEMA %s CASCADE;", p.searchPath)
-	conn.Exec(context.Background(), dropSchemaQuery)
-	if newConn {
-		_ = conn.Close()
-	}
 }
 
 // Sometimes other libraries require us to use the stdlib database. So we provide a function to do so.

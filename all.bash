@@ -3,9 +3,9 @@
 function test() {
     docker-compose down --remove-orphans
     docker-compose up -d
-    sleep 1
+    sleep 0.3
     go mod tidy
-    gotestsum -- -v -race -json ./...
+    gotestsum -- -v -race -vet=all -json ./...
     docker-compose down --remove-orphans
 }
 

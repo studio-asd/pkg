@@ -251,13 +251,16 @@ func (h *HealthcheckService) Name() string {
 }
 
 func (h *HealthcheckService) Init(ctx Context) error {
+	// If the healthcheck is enabled, then we will create the notification channel with a size
+	// of len(services) * 20.
 	if h.config.Enabled {
-		h.notifC = make(chan HealthcheckNotification, len(h.services)*50)
+		h.notifC = make(chan HealthcheckNotification, len(h.services)*20)
 	}
 	h.iCtx = ctx
 	return nil
 }
 
+// Run runs the healthcheck service. The service runs two goroutines to serve the notification worker and check worker.
 func (h *HealthcheckService) Run(ctx context.Context) error {
 	g := errgroup.Group{}
 	// Only handle notifications if there are consumers of the notification.
@@ -293,6 +296,8 @@ func (h *HealthcheckService) Stop(ctx context.Context) error {
 
 // check directly triggers the healthcheck to the service. This function is exposed to the internal runner because sometimes we need to
 // directly check the service.
+//
+// The function returns status healthy if the service doesn't implement the check function.
 func (h *HealthcheckService) check(ctx context.Context, svc ServiceRunnerAware) (HealthStatus, error) {
 	hc, ok := h.services[svc]
 	// If the service is not implementing the health method, we will just return a healthy status as we don't really
@@ -304,9 +309,30 @@ func (h *HealthcheckService) check(ctx context.Context, svc ServiceRunnerAware) 
 }
 
 func (h *HealthcheckService) handleNotifications(ctx context.Context) error {
-	// svcFilter is a map filter for every healthcheckConsumer, so we are not looping all filters all over again in every notification.
-	// Please NOTE that this approach is not concurrently safe, but its okay for now as we only use it in a single loop.
-	svcFilter := make(map[HealthcheckConsumer]map[string]bool)
+	// Initiate all the handlers and the service filter to ensure each service only consumes the needed messages from the service
+	// they want to listen from.
+	handlers := make([]HealthcheckNotifierHandler, len(h.consumers))
+	for idx, consumer := range h.consumers {
+		consumer.ConsumeHealthcheckNotification(func(s []string, hcf HealthcheckConsumeFunc) error {
+			// Use the emptyFilter to mark whether we need to filter the service name or not. If the list of the filter
+			// is empty, then we should not seek anything in the filter at all.
+			var emptyFilter bool
+			filter := make(map[string]struct{})
+			for _, svcName := range s {
+				filter[svcName] = struct{}{}
+			}
+			if len(filter) == 0 {
+				emptyFilter = true
+			}
+			handlers[idx] = HealthcheckNotifierHandler{
+				filter:      filter,
+				emptyFilter: emptyFilter,
+				handlerFunc: hcf,
+			}
+			return nil
+		})
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -318,46 +344,14 @@ func (h *HealthcheckService) handleNotifications(ctx context.Context) error {
 				s.Set(notification.Status)
 			}
 
-			for _, consumer := range h.consumers {
+			for _, handler := range handlers {
 				// For every notification loop we need to check whether the context is cancelled or not. If the context
 				// is already cancelled then we should forget about sending the notifications, because the entire program
 				// will exit anyway.
 				if ctx.Err() != nil {
 					return nil
 				}
-				// Sends the notification to the service that needs the notification.
-				consumer.ConsumeHealthcheckNotification(func(s []string, hcf HealthcheckConsumeFunc) error {
-					// If there are no services to listen to, then we should just exit.
-					if len(s) == 0 {
-						return nil
-					}
-					// Fast path, check whether the services is exists in the service filter index.
-					if _, ok := svcFilter[consumer]; ok && !svcFilter[consumer][notification.ServiceName] {
-						return nil
-					}
-					// Slow path, check and index all services by looping the filters.
-					if _, ok := svcFilter[consumer]; !ok {
-						// Fill the service filter for a given consumer with all services.
-						svcFilter[consumer] = make(map[string]bool)
-						// Filter the service name, and only send the notification if it have the service name.
-						var found bool
-						for _, svcName := range s {
-							// Don't track service with empty name. Maybe we should warn the client.
-							if svcName == "" {
-								continue
-							}
-							svcFilter[consumer][svcName] = true
-							if notification.ServiceName == svcName {
-								found = true
-							}
-						}
-						if !found {
-							return nil
-						}
-					}
-					hcf(notification)
-					return nil
-				})
+				handler.handle(notification)
 			}
 		}
 	}
@@ -390,6 +384,21 @@ func (h *HealthcheckService) handleChecks(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// HealthcheckNotifierHandler handles the healthcheck notifications and decide whether we need to invoke the notification
+// to a coresponding service.
+type HealthcheckNotifierHandler struct {
+	handlerFunc HealthcheckConsumeFunc
+	filter      map[string]struct{}
+	emptyFilter bool
+}
+
+func (h *HealthcheckNotifierHandler) handle(notif HealthcheckNotification) {
+	if _, ok := h.filter[notif.ServiceName]; !ok {
+		return
+	}
+	h.handlerFunc(notif)
 }
 
 // HealthcheckNotifier notifies the healthcheck service of a given service health status by pushing them. The health service then will

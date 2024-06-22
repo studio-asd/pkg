@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -14,8 +15,10 @@ const (
 	testPGName  = "postgres_test"
 )
 
-var testPG *Postgres
-var testDriver string
+var (
+	testPG     *Postgres
+	testDriver string
+)
 
 func TestMain(m *testing.M) {
 	for _, driver := range []string{"postgres", "pgx"} {
@@ -25,26 +28,21 @@ func TestMain(m *testing.M) {
 		testDriver = driver
 
 		var err error
-		originConn, err := Connect(context.Background(), ConnectConfig{
+		config := ConnectConfig{
 			Driver:   driver,
 			Username: "postgres",
 			Password: "postgres",
 			Host:     "localhost",
 			Port:     "5432",
-		})
-		if err != nil {
-			log.Fatal(err)
 		}
-		testPG, err = CreateDatabase(context.Background(), originConn, testPGName)
+
+		testPG, err = createDatabase(context.Background(), config, testPGName)
 		if err != nil {
-			log.Fatal(err)
-		}
-		if err := originConn.Close(); err != nil {
 			log.Fatal(err)
 		}
 
 		code := m.Run()
-		if err := testPG.Close(); err != nil {
+		if err := dropDatabase(context.Background(), config, testPGName); err != nil {
 			log.Fatal(err)
 		}
 		if code != 0 {
@@ -85,7 +83,7 @@ func TestGenerateURL(t *testing.T) {
 				SSLMode:    "disable",
 				SearchPath: "public",
 			},
-			expect: "postgres://username:password@localhost:5432/testing?sslmode=disable&searchPath=public",
+			expect: "postgres://username:password@localhost:5432/testing?sslmode=disable&search_path=public",
 		},
 	}
 
@@ -109,7 +107,7 @@ func TestConnect(t *testing.T) {
 		name   string
 		config ConnectConfig
 		dbName string
-		setup  func(context.Context, string, *testing.T)
+		setup  func(context.Context, ConnectConfig, string, *testing.T)
 	}{
 		{
 			name: "without schema",
@@ -121,9 +119,9 @@ func TestConnect(t *testing.T) {
 				Port:     "5432",
 			},
 			dbName: "test_connect_1",
-			setup: func(ctx context.Context, name string, t *testing.T) {
+			setup: func(ctx context.Context, config ConnectConfig, name string, t *testing.T) {
 				t.Helper()
-				pg, err := CreateDatabase(ctx, testPG, name)
+				pg, err := createDatabase(ctx, config, name)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -143,9 +141,9 @@ func TestConnect(t *testing.T) {
 				SearchPath: "testing2",
 			},
 			dbName: "test_connect_2",
-			setup: func(ctx context.Context, name string, t *testing.T) {
+			setup: func(ctx context.Context, config ConnectConfig, name string, t *testing.T) {
 				t.Helper()
-				pg, err := CreateDatabase(ctx, testPG, name)
+				pg, err := createDatabase(ctx, config, name)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -166,7 +164,7 @@ func TestConnect(t *testing.T) {
 			config := test.config
 			config.DBName = test.dbName
 
-			test.setup(context.Background(), test.dbName, t)
+			test.setup(context.Background(), test.config, test.dbName, t)
 			pg, err := Connect(context.Background(), config)
 			if err != nil {
 				t.Fatal(err)
@@ -176,4 +174,54 @@ func TestConnect(t *testing.T) {
 			}
 		})
 	}
+}
+
+func createDatabase(ctx context.Context, config ConnectConfig, name string) (*Postgres, error) {
+	config.DBName = ""
+	pg, err := Connect(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	defer pg.Close()
+
+	query := fmt.Sprintf("CREATE DATABASE %s", name)
+	_, err = pg.Exec(ctx, query)
+	if err != nil && err != context.Canceled {
+		// If we got an error it might be because the database is still exist.
+		fmt.Println("DROPPING DATABASE")
+		errDrop := dropDatabase(ctx, config, name)
+		if errDrop != nil {
+			return nil, errors.Join(err, errDrop)
+		}
+		_, err = pg.Exec(ctx, query)
+		fmt.Println("GOt ERROR", err)
+	}
+	if err != nil {
+		err = fmt.Errorf("failed to create database: %w", err)
+		return nil, err
+	}
+
+	newConnConfig := config
+	newConnConfig.DBName = name
+	newConn, err := Connect(ctx, newConnConfig)
+	if err != nil {
+		return nil, err
+	}
+	return newConn, nil
+}
+
+func dropDatabase(ctx context.Context, config ConnectConfig, name string) error {
+	config.DBName = ""
+	pg, err := Connect(ctx, config)
+	if err != nil {
+		return err
+	}
+	defer pg.Close()
+
+	query := fmt.Sprintf("DROP DATABASE %s", name)
+	_, err = pg.Exec(ctx, query)
+	if err != nil {
+		err = fmt.Errorf("failed to drop database: %w", err)
+	}
+	return err
 }

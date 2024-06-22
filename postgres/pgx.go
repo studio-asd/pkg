@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -83,16 +84,8 @@ func (t *PgxQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data 
 		attribute.String("api.owner", bg.APIOwner),
 	}
 	// If the arguments is available and not excluded, then we will add them into the trace.
-	// Unfortunately, this part will allocates quite significantly as data.Args is []any, and each 'any'
-	// might not be string. We cannot convert all of them to string via reflect either as there are too
-	// many posibilities of how pgx construct their arguments. This means we can only do a best effrot
-	// of doing %+v to print the type verbosely.
 	if data.Args != nil && !t.excludeArgs {
-		args := make([]string, len(data.Args))
-		for idx, arg := range data.Args {
-			args[idx] = fmt.Sprintf("%+v", arg)
-		}
-		attributes = append(attributes, attribute.StringSlice("pg.query.args", args))
+		attributes = append(attributes, attribute.StringSlice("pg.query.args", queryArgsToStringSlice(data.Args)))
 	}
 
 	// We will not end the trace because the query have not yet started. We won't get the trace duration data if
@@ -108,7 +101,7 @@ func (t *PgxQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data 
 
 func (t *PgxQueryTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
 	attributes := []attribute.KeyValue{
-		attribute.String("operation", data.CommandTag.String()),
+		attribute.String("pg.command", data.CommandTag.String()),
 	}
 	if data.Err != nil {
 		attributes = append(attributes, attribute.String("error", data.Err.Error()))
@@ -126,4 +119,34 @@ func (t *PgxQueryTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pg
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(attributes...)
 	span.End()
+}
+
+// queryArgsToStringSlice returns args with type of any to a slice of string.
+func queryArgsToStringSlice(args []any) []string {
+	strAttributes := make([]string, len(args))
+	for idx, arg := range args {
+		switch v := arg.(type) {
+		case string:
+			strAttributes[idx] = v
+		case *string:
+			strAttributes[idx] = *v
+		case int:
+			strAttributes[idx] = strconv.Itoa(v)
+		case int32:
+			strAttributes[idx] = strconv.FormatInt(int64(v), 10)
+		case int64:
+			strAttributes[idx] = strconv.FormatInt(int64(v), 10)
+		case float32:
+			strAttributes[idx] = strconv.FormatFloat(float64(v), 'f', 0, 32)
+		case float64:
+			strAttributes[idx] = strconv.FormatFloat(float64(v), 'f', 0, 32)
+		default:
+			// Unfortunately, this part will allocate quite significantly as data.Args is []any, and each 'any'
+			// might not be string. We cannot convert all of them to string via reflect either as there are too
+			// many posibilities of how pgx construct their arguments. This means we can only do a best effrot
+			// of doing %v to print the type verbosely.
+			strAttributes[idx] = fmt.Sprintf("%v", v)
+		}
+	}
+	return strAttributes
 }

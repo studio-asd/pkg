@@ -263,3 +263,11 @@ func (e emptyStringScanner) Scan(value any) error {
 func NullIsEmpty(s *string) sql.Scanner {
 	return emptyStringScanner{s}
 }
+
+// CreateDatabase creates a database from the current connected user. To do this action, please ensure your user has the priviledge
+// to create a new database.
+func (p *Postgres) CreateDatabase(ctx context.Context, name string) error {
+	query := fmt.Sprintf("CREATE DATABASE %s;", name)
+	_, err := p.Exec(ctx, query)
+	return err
+}

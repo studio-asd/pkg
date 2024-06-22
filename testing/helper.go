@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
@@ -16,6 +18,9 @@ var ErrEventualTimeout = errors.New("timeout on eventual evaluation")
 // As this function is only a helper, we don't want to inject testing.T into the function. If we do that then we need to add more parameters into the function to
 // compare the test/error result.
 func Eventually(t *testing.T, fn func() error, every, timeout time.Duration) {
+	if every == 0 {
+		t.Fatal("every cannot be 0")
+	}
 	retryCount, err := eventually(fn, every, timeout)
 	if err == nil {
 		return
@@ -42,6 +47,7 @@ func Eventually(t *testing.T, fn func() error, every, timeout time.Duration) {
 func eventually(fn func() error, every, timeout time.Duration) (retryCount int, err error) {
 	tStop := time.Now().Add(timeout)
 	ticker := time.NewTicker(every)
+	defer ticker.Stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -70,4 +76,18 @@ func eventually(fn func() error, every, timeout time.Duration) (retryCount int, 
 		break
 	}
 	return
+}
+
+// RepositoryRoot returns the path of root repository using git command. The function returns error if the git command is not exist.
+func RepositoryRoot() (string, error) {
+	_, err := exec.LookPath("git")
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.CommandContext(context.Background(), "git", "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.ReplaceAll(string(out), "\n", ""), nil
 }

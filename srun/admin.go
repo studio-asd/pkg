@@ -2,7 +2,6 @@ package srun
 
 import (
 	"context"
-	"errors"
 	"net"
 	"net/http"
 	"net/http/pprof"
@@ -72,21 +71,17 @@ func (c *AdminServerConfig) validate() error {
 type adminHTTPServer struct {
 	listener net.Listener
 	server   *http.Server
-	config   *AdminServerConfig
+	config   AdminServerConfig
 	readyC   chan struct{}
 }
 
 func newAdminServer(config AdminServerConfig) (*adminHTTPServer, error) {
-	if reflect.ValueOf(config).IsZero() {
-		return nil, errors.New("admin server configuration cannot be empty")
-	}
-	conf := &config
-	if err := conf.validate(); err != nil {
+	if err := config.validate(); err != nil {
 		return nil, err
 	}
 	return &adminHTTPServer{
 		server: &http.Server{},
-		config: conf,
+		config: config,
 		readyC: make(chan struct{}, 1),
 	}, nil
 }
@@ -106,7 +101,7 @@ func (a *adminHTTPServer) Init(Context) error {
 
 func (a *adminHTTPServer) Run(ctx context.Context) error {
 	httpServer := &http.Server{
-		Handler: handler(*a.config),
+		Handler: handler(a.config),
 	}
 	a.server = httpServer
 	time.AfterFunc(time.Millisecond*500, func() {
@@ -150,7 +145,7 @@ func (a *adminHTTPServer) SetHealthCheckFunc(fn func() error) {
 func handler(config AdminServerConfig) *http.ServeMux {
 	mux := http.NewServeMux()
 	// Prometheus metrics endpoint.
-	if config.prometheusHandlerDisabled {
+	if !config.prometheusHandlerDisabled {
 		mux.Handle("GET /metrics", promhttp.Handler())
 	}
 	// Pprof endpoints.

@@ -56,6 +56,18 @@ const (
 	serviceStateStopped
 )
 
+// Service types defines the type of services inside the service runner.
+const (
+	// serviceTypeInternal flag that the service is owned internally.
+	serviceTypeInternal = iota + 1
+	// serviceTypeLongRunning marked the service as long running task.
+	serviceTypeLongRunning
+	// serviceTypeConcurrent marked the service as concurrent services.
+	serviceTypeConcurrent
+	// serviceTypeUser marked the service is coming from the user of the package.
+	serviceTypeUser
+)
+
 var (
 	errServiceRunnerAlreadyRunning = errors.New("service runner is already running")
 	errGracefulPeriodTimeout       = errors.New("graceful-period timeout")
@@ -292,7 +304,6 @@ func New(config Config) *Runner {
 	// Listen to the signal to exit the program.
 	ctxSignal, cancel := signal.NotifyContext(
 		ctx,
-		syscall.SIGKILL,
 		syscall.SIGTERM,
 		syscall.SIGINT,
 		syscall.SIGQUIT,
@@ -711,6 +722,14 @@ type ServiceStateTracker struct {
 	mu     sync.RWMutex
 	state  serviceState
 	logger *slog.Logger
+	// svcTypes stores the type of services. The types is a slice because we might want to record the
+	// servie to several categories.
+	//
+	// For example:
+	//   [internal][long-running]
+	//   [internal][concurrent]
+	//   [user][long-running]
+	svcTypes []int
 }
 
 func newServiceStateTracker(s ServiceRunnerAware, logger *slog.Logger) *ServiceStateTracker {

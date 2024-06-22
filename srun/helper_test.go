@@ -3,6 +3,7 @@ package srun
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,11 @@ func TestConcurrentServices(t *testing.T) {
 	lrtFn3 := func(ctx Context) error {
 		time.Sleep(time.Second * 3)
 		return nil
+	}
+	// lrtFn4 only waits for 1 second and returns an error.
+	lrtFn4 := func(ctx Context) error {
+		time.Sleep(time.Second * 1)
+		return errors.New("some error")
 	}
 
 	runnerConfig := Config{
@@ -290,6 +296,53 @@ func TestConcurrentServices(t *testing.T) {
 				t.Logf("output\n%s", logOutput)
 				t.Fatalf("%s not exist in the log", check)
 			}
+		}
+	})
+
+	t.Run("start_error", func(t *testing.T) {
+		buff := bytes.NewBuffer(nil)
+		conf := runnerConfig
+		conf.Logger.Output = buff
+
+		r := New(conf)
+		lrt1 := newLRT(t, "testing_1", lrtFn1)
+		lrt2 := newLRT(t, "testing_2", lrtFn2)
+		lrt3 := newLRT(t, "testing_3", lrtFn3)
+		lrt4 := newLRT(t, "testing_4", lrtFn4)
+		svc, err := BuildConcurrentServices(
+			newRegistrar(r),
+			lrt1,
+			lrt2,
+			lrt3,
+			lrt4,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if err := svc.Init(Context{}); err != nil {
+			t.Fatal(err)
+		}
+
+		errC := make(chan error)
+		go func() {
+			errC <- svc.Run(context.Background())
+		}()
+		// Wait until the service is ready. The test is not failing in the ready state because the lrtFn4 is failing after 1 second
+		// and for LongRunningTask the wait ready is only 300 miliseconds. So we should expect the error to appear in the error channel.
+		err = svc.Ready(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Stop the service before the service exiting.
+		err = svc.Stop(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		err = <-errC
+		if err == nil {
+			t.Fatal("expecting error but got nil")
 		}
 	})
 }

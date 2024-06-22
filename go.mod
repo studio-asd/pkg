@@ -3,7 +3,6 @@ module github.com/albertwidi/pkg
 go 1.22.0
 
 require (
-	github.com/Masterminds/squirrel v1.5.4
 	github.com/cloudflare/tableflip v1.2.3
 	github.com/google/go-cmp v0.6.0
 	github.com/gorilla/schema v1.2.1
@@ -28,8 +27,6 @@ require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20221227161230-091c0ba34f0a // indirect
 	github.com/jackc/puddle/v2 v2.2.1 // indirect
-	github.com/lann/builder v0.0.0-20180802200727-47ae307949d0 // indirect
-	github.com/lann/ps v0.0.0-20150810152359-62de8c46ede0 // indirect
 	github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0 // indirect
 	github.com/prometheus/client_model v0.5.0 // indirect
 	github.com/prometheus/common v0.45.0 // indirect

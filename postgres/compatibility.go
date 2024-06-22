@@ -174,3 +174,42 @@ func (t *TransactCompat) Commit() error {
 	}
 	return t.tx.Commit()
 }
+
+func (t *TransactCompat) Exec(ctx context.Context, query string, args ...any) (*ExecResultCompat, error) {
+	if t.pgxTx != nil {
+		ct, err := t.pgxTx.Exec(ctx, query, args...)
+		if err != nil {
+			return nil, err
+		}
+		return &ExecResultCompat{pgxResult: ct}, nil
+	}
+	result, err := t.tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return &ExecResultCompat{result: result}, nil
+}
+
+func (t *TransactCompat) Query(ctx context.Context, query string, args ...any) (*RowsCompat, error) {
+	if t.pgxTx != nil {
+		rows, err := t.pgxTx.Query(ctx, query, args...)
+		if err != nil {
+			return nil, err
+		}
+		return &RowsCompat{pgxRows: rows}, nil
+	}
+	rows, err := t.tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return &RowsCompat{rows: rows}, nil
+}
+
+func (t *TransactCompat) QueryRow(ctx context.Context, query string, args ...any) *RowCompat {
+	if t.pgxTx != nil {
+		row := t.pgxTx.QueryRow(ctx, query, args...)
+		return &RowCompat{pgxRow: row}
+	}
+	row := t.tx.QueryRowContext(ctx, query, args...)
+	return &RowCompat{row: row}
+}
