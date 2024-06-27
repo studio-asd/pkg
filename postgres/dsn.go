@@ -46,22 +46,40 @@ func (s *scanner) SkipSpaces() (rune, bool) {
 	return r, ok
 }
 
-// PostgresDSN parses a postgres-type dsn into a map
-func PostgresDSN(dsn string) (map[string]string, error) {
+type DSN struct {
+	Username        string
+	Password        string
+	Host            string
+	Port            string
+	DatabaseName    string
+	SSLMode         string
+	ApplicationName string
+}
+
+// ParseDSN parses a postgres-type dsn into a map
+func ParseDSN(dsn string) (DSN, error) {
 	var err error
 	meta := make(map[string]string)
 
 	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
 		dsn, err = parsePostgresURL(dsn)
 		if err != nil {
-			return nil, err
+			return DSN{}, err
 		}
 	}
 
 	if err := parsePogtresOpts(dsn, meta); err != nil {
-		return nil, err
+		return DSN{}, err
 	}
-	return meta, nil
+	return DSN{
+		Username:        meta["user"],
+		Password:        meta["password"],
+		Host:            meta["host"],
+		Port:            meta["port"],
+		DatabaseName:    meta["dbname"],
+		SSLMode:         meta["sslmode"],
+		ApplicationName: meta["application_name"],
+	}, nil
 }
 
 // parsePostgresURL no longer needs to be used by clients of this library since supplying a URL as a

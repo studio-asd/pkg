@@ -2,6 +2,7 @@ package srun
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/pprof"
@@ -101,7 +102,7 @@ func (a *adminHTTPServer) Init(Context) error {
 
 func (a *adminHTTPServer) Run(ctx context.Context) error {
 	httpServer := &http.Server{
-		Handler: handler(a.config),
+		Handler: a.handler(),
 	}
 	a.server = httpServer
 	time.AfterFunc(time.Millisecond*500, func() {
@@ -142,16 +143,47 @@ func (a *adminHTTPServer) SetHealthCheckFunc(fn func() error) {
 	a.config.HealthcheckFunc = fn
 }
 
-func handler(config AdminServerConfig) *http.ServeMux {
+func (a *adminHTTPServer) handler() *http.ServeMux {
 	mux := http.NewServeMux()
-	// Prometheus metrics endpoint.
-	if !config.prometheusHandlerDisabled {
-		mux.Handle("GET /metrics", promhttp.Handler())
-	}
-	// Pprof endpoints.
-	mux.HandleFunc("GET /debug/pprof", func(w http.ResponseWriter, r *http.Request) {
-		pprof.Index(w, r)
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		if a.config.HealthcheckFunc == nil {
+			w.WriteHeader(http.StatusNotImplemented)
+			w.Write([]byte("NOT IMPLEMENTED"))
+			return
+		}
+		if err := a.config.HealthcheckFunc(); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
 	})
+	mux.HandleFunc("GET /ready", func(w http.ResponseWriter, r *http.Request) {
+		if a.config.ReadinessFunc == nil {
+			w.WriteHeader(http.StatusNotImplemented)
+			w.Write([]byte("NOT IMPLEMENTED"))
+			return
+		}
+		if err := a.config.ReadinessFunc(); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+	// Prometheus metrics endpoint.
+	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
+		// If the metrics endpoint is disabled, we will return non 200(OK) status code.
+		if !a.config.prometheusHandlerDisabled {
+			w.WriteHeader(http.StatusNotImplemented)
+			w.Write([]byte("NOT IMPLEMENTED"))
+			return
+		}
+		promhttp.Handler().ServeHTTP(w, r)
+	})
+	// Pprof endpoints.
 	mux.HandleFunc("GET /debug/cmdline", func(w http.ResponseWriter, r *http.Request) {
 		pprof.Cmdline(w, r)
 	})

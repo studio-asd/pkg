@@ -2,6 +2,7 @@ package srun
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"testing"
@@ -56,6 +57,8 @@ func TestAdminEndpoints(t *testing.T) {
 	t.Parallel()
 
 	endpoints := []string{
+		"/health",
+		"/ready",
 		"/metrics",
 		"/debug/pprof",
 		"/debug/cmdline",
@@ -69,7 +72,14 @@ func TestAdminEndpoints(t *testing.T) {
 	}
 
 	// Use the default configuration, so it will start serving on :8778.
-	admin, err := newAdminServer(AdminServerConfig{})
+	admin, err := newAdminServer(AdminServerConfig{
+		HealthcheckFunc: func() error {
+			return nil
+		},
+		ReadinessFunc: func() error {
+			return nil
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,4 +122,134 @@ func TestAdminEndpoints(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHealthcheckAndReadiness(t *testing.T) {
+	t.Parallel()
+	client := http.Client{}
+	defer client.CloseIdleConnections()
+
+	t.Run("healthcheck", func(t *testing.T) {
+		t.Parallel()
+		admin, err := newAdminServer(AdminServerConfig{
+			Address: ":8777",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := admin.Init(Context{}); err != nil {
+			t.Fatal(err)
+		}
+
+		errC := make(chan error, 1)
+		go func() {
+			errC <- admin.Run(context.Background())
+		}()
+
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+
+		select {
+		case err := <-errC:
+			t.Fatal(err)
+		case <-ticker.C:
+			ticker.Stop()
+			break
+		}
+		defer admin.Stop(context.Background())
+
+		resp, err := client.Get("http://localhost:8777/health")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusNotImplemented {
+			t.Fatalf("expecting status not implemented but got %s", resp.Status)
+		}
+
+		// Set the healthcheck and check again for OK status.
+		admin.SetHealthCheckFunc(func() error {
+			return nil
+		})
+		resp, err = client.Get("http://localhost:8777/health")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expecting status ok but got %s", resp.Status)
+		}
+
+		// Set the healthcheck and check again for INTERNAL SERVER ERROR status.
+		admin.SetHealthCheckFunc(func() error {
+			return errors.New("error")
+		})
+		resp, err = client.Get("http://localhost:8777/health")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusInternalServerError {
+			t.Fatalf("expecting status internal server error but got %s", resp.Status)
+		}
+	})
+
+	t.Run("readiness", func(t *testing.T) {
+		t.Parallel()
+		admin, err := newAdminServer(AdminServerConfig{
+			Address: ":8776",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := admin.Init(Context{}); err != nil {
+			t.Fatal(err)
+		}
+
+		errC := make(chan error, 1)
+		go func() {
+			errC <- admin.Run(context.Background())
+		}()
+
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+
+		select {
+		case err := <-errC:
+			t.Fatal(err)
+		case <-ticker.C:
+			ticker.Stop()
+			break
+		}
+		defer admin.Stop(context.Background())
+
+		resp, err := client.Get("http://localhost:8776/ready")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusNotImplemented {
+			t.Fatalf("expecting status not implemented but got %s", resp.Status)
+		}
+
+		// Set the readiness and check again
+		admin.SetReadinessFunc(func() error {
+			return nil
+		})
+		resp, err = client.Get("http://localhost:8776/ready")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expecting status ok but got %s", resp.Status)
+		}
+
+		// Set the readiness and check again for INTERNAL SERVER ERROR status.
+		admin.SetReadinessFunc(func() error {
+			return errors.New("error")
+		})
+		resp, err = client.Get("http://localhost:8776/ready")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusInternalServerError {
+			t.Fatalf("expecting status internal server error but got %s", resp.Status)
+		}
+	})
 }

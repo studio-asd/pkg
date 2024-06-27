@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,16 +31,18 @@ const (
 
 // ConnectConfig stores the configuration to create a new connection to PostgreSQL database.
 type ConnectConfig struct {
-	Driver       string
-	Username     string
-	Password     string
-	Host         string
-	Port         string
-	DBName       string
-	SearchPath   string
-	SSLMode      string
-	MaxOpenConns int
-	Tracer       trace.Tracer
+	Driver          string
+	Username        string
+	Password        string
+	Host            string
+	Port            string
+	DBName          string
+	SearchPath      string
+	SSLMode         string
+	MaxOpenConns    int
+	ConnMaxIdletime time.Duration
+	ConnMaxLifetime time.Duration
+	Tracer          trace.Tracer
 }
 
 func (c *ConnectConfig) copy() ConnectConfig {
@@ -83,12 +86,12 @@ func (c *ConnectConfig) validate() error {
 // DSN returns the PostgreSQL DSN.
 //
 //	For example: postgres://username:password@localhost:5432/mydb?sslmode=false.
-func (c *ConnectConfig) DSN() (url string, dsn map[string]string, err error) {
+func (c *ConnectConfig) DSN() (url string, dsn DSN, err error) {
 	url = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s", c.Username, c.Password, c.Host, c.Port, c.DBName, c.SSLMode)
 	if c.SearchPath != "" {
 		url = url + "&search_path=" + c.SearchPath
 	}
-	dsn, err = PostgresDSN(url)
+	dsn, err = ParseDSN(url)
 	return
 }
 
@@ -147,12 +150,16 @@ func Connect(ctx context.Context, connConfig ConnectConfig) (*Postgres, error) {
 			return nil, err
 		}
 		db.SetMaxOpenConns(config.MaxOpenConns)
+		db.SetConnMaxIdleTime(config.ConnMaxIdletime)
+		db.SetConnMaxLifetime(config.ConnMaxLifetime)
 	case "pgx":
 		poolConfig, err := pgxpool.ParseConfig(url)
 		if err != nil {
 			return nil, err
 		}
 		poolConfig.MaxConns = int32(config.MaxOpenConns)
+		poolConfig.MaxConnIdleTime = config.ConnMaxIdletime
+		poolConfig.MaxConnLifetime = config.ConnMaxLifetime
 		poolConfig.ConnConfig.Tracer = &PgxQueryTracer{
 			tracer: tracer,
 			dbInfo: struct {

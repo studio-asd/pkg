@@ -9,15 +9,15 @@ import (
 func TestPostgres(t *testing.T) {
 	t.Parallel()
 
-	expected := map[string]string{
-		"user":     "bob",
-		"password": "secret",
-		"host":     "1.2.3.4",
-		"port":     "5432",
-		"dbname":   "mydb",
-		"sslmode":  "verify-full",
+	expected := DSN{
+		Username:     "bob",
+		Password:     "secret",
+		Host:         "1.2.3.4",
+		Port:         "5432",
+		DatabaseName: "mydb",
+		SSLMode:      "verify-full",
 	}
-	m, err := PostgresDSN("postgres://bob:secret@1.2.3.4:5432/mydb?sslmode=verify-full")
+	m, err := ParseDSN("postgres://bob:secret@1.2.3.4:5432/mydb?sslmode=verify-full")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,16 +25,16 @@ func TestPostgres(t *testing.T) {
 		t.Fatalf("(-want/+got)\n%s", diff)
 	}
 
-	expected = map[string]string{
-		"user":             "dog",
-		"password":         "zMWmQz26GORmgVVKEbEl",
-		"port":             "5433",
-		"host":             "master-db-master-active.postgres.service.consul",
-		"dbname":           "dogdatastaging",
-		"application_name": "trace-api",
+	expected = DSN{
+		Username:        "dog",
+		Password:        "zMWmQz26GORmgVVKEbEl",
+		Host:            "master-db-master-active.postgres.service.consul",
+		Port:            "5433",
+		DatabaseName:    "dogdatastaging",
+		ApplicationName: "trace-api",
 	}
 	dsn := "password=zMWmQz26GORmgVVKEbEl dbname=dogdatastaging application_name=trace-api port=5433 host=master-db-master-active.postgres.service.consul user=dog"
-	m, err = PostgresDSN(dsn)
+	m, err = ParseDSN(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

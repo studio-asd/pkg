@@ -296,6 +296,63 @@ func TestServiceStateTracker(t *testing.T) {
 	}
 }
 
+func TestServiceStartOrder(t *testing.T) {
+	t.Run("normal flow", func(t *testing.T) {
+		tracker := newServiceStateTracker(&serviceDoNothing{}, slog.Default())
+		// Run before init.
+		if err := tracker.Run(context.Background()); !errors.Is(err, errInvalidStateOrder) {
+			t.Fatalf("run: expecting error %v but got %v", errInvalidStateOrder, err)
+		}
+		// Init.
+		if err := tracker.Init(Context{}); err != nil {
+			t.Fatal(err)
+		}
+		// Check Ready before Run.
+		if err := tracker.Ready(context.Background()); !errors.Is(err, errInvalidStateOrder) {
+			t.Fatalf("ready: expecting error %v but got %v", errInvalidStateOrder, err)
+		}
+		// Run.
+		if err := tracker.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		// Stop before the service is ready/running.
+		if err := tracker.Stop(context.Background()); !errors.Is(err, errInvalidStateOrder) {
+			t.Fatalf("stop: expecting error %v but got %v", errInvalidStateOrder, err)
+		}
+		// Ready.
+		if err := tracker.Ready(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		// Stop.
+		if err := tracker.Stop(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("ready racy flow", func(t *testing.T) {
+		tracker := newServiceStateTracker(&serviceDoNothing{}, slog.Default())
+		// Init.
+		if err := tracker.Init(Context{}); err != nil {
+			t.Fatal(err)
+		}
+
+		errC := make(chan error, 1)
+		go func() {
+			errC <- tracker.Ready(context.Background())
+		}()
+		go func() {
+			time.Sleep(time.Millisecond * 200)
+			errC <- tracker.Run(context.Background())
+		}()
+
+		for range 2 {
+			err := <-errC
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+}
+
 type serviceDoNothing struct{}
 
 func (s *serviceDoNothing) Name() string {

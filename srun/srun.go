@@ -89,6 +89,8 @@ var (
 	errLongRunningTaskStopDeadline = errors.New("long_running_task: stop deadline exceeded")
 	// errUnhealthyService is used when we are failed to check the service health for the first time.
 	errUnhealthyService = errors.New("healthcheck: service is not healthy")
+	// errInvalidStateOrder is used when the service is not in a desired state when a function to change state is triggered.
+	errInvalidStateOrder = errors.New("service is not in a desired state")
 )
 
 // Context holds runner context including all objects that belong to the runner. For example we can pass logger and otel meter
@@ -371,21 +373,6 @@ func (r *Runner) register(services ...ServiceRunnerAware) error {
 		}
 		// Wrap ALL services using ServiceState tracker as we need to track the status/state of all services.
 		r.services = append(r.services, newServiceStateTracker(svc, r.logger))
-
-		// Init the service and stop them in-case of error. This is because in the init state the service might doing something that need
-		// some cleanup in the later(stop) state. This also ensure the service is always in a 'stopped' state.
-		s := svc
-		group.Go(func() error {
-			err := s.Init(Context{})
-			if err == nil {
-				return nil
-			}
-			errStop := s.Stop(initTimeoutCtx)
-			if errStop != nil {
-				err = errors.Join(err, errStop)
-			}
-			return err
-		})
 	}
 	return group.Wait()
 }
@@ -767,6 +754,9 @@ func (s *ServiceStateTracker) State() serviceState {
 }
 
 func (s *ServiceStateTracker) Init(ctx Context) error {
+	if s.getState() != serviceStateStopped {
+		return fmt.Errorf("%w: expecting %s state but got %s", errInvalidStateOrder, serviceStateStopped, s.getState())
+	}
 	s.setState(serviceStateInitiating)
 	s.logger.Info(fmt.Sprintf("[Service] %s: %s...", s.Name(), s.State()))
 	err := s.ServiceRunnerAware.Init(ctx)
@@ -779,6 +769,9 @@ func (s *ServiceStateTracker) Init(ctx Context) error {
 }
 
 func (s *ServiceStateTracker) Run(ctx context.Context) error {
+	if s.getState() != serviceStateInitiated {
+		return fmt.Errorf("%w: expecting %s state but got %s", errInvalidStateOrder, serviceStateInitiated, s.getState())
+	}
 	if s.getState() >= serviceStateStarting && s.getState() <= serviceStateRunning {
 		return errServiceRunnerAlreadyRunning
 	}
@@ -791,6 +784,18 @@ func (s *ServiceStateTracker) Run(ctx context.Context) error {
 func (s *ServiceStateTracker) Ready(ctx context.Context) error {
 	if s.getState() >= serviceStateShutdown {
 		return errCantCheckReadiness
+	}
+
+	// If the service is still in the initiate state, this means the Run() function haven't been invoked yet. In can be the Run()
+	// is invoked but the goroutine is not yet scheduled yet, so we need to wait with timeout.
+	for i := 0; i < 3; i++ {
+		if s.getState() >= serviceStateStarting {
+			break
+		}
+		<-time.After(time.Millisecond * 300)
+	}
+	if s.getState() != serviceStateStarting {
+		return fmt.Errorf("%w: expecting %s state", errInvalidStateOrder, serviceStateStarting)
 	}
 	if s.getState() == serviceStateRunning {
 		return nil
@@ -814,6 +819,9 @@ func (s *ServiceStateTracker) Stop(ctx context.Context) error {
 	}
 	if s.getState() == serviceStateShutdown {
 		return errors.New("service is in shutting down state")
+	}
+	if s.getState() != serviceStateRunning {
+		return fmt.Errorf("%w: expecting %s state", errInvalidStateOrder, serviceStateRunning)
 	}
 	s.setState(serviceStateShutdown)
 	s.logger.Info(fmt.Sprintf("[Service] %s: %s...", s.Name(), s.State()))
