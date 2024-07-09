@@ -126,7 +126,6 @@ func (*TestHealthcheckNotif) Stop(ctx context.Context) error {
 
 func (t *TestHealthcheckNotif) ConsumeHealthcheckNotification(fn HealthcheckNotifyFunc) {
 	err := fn([]string{"test_svc"}, func(notif HealthcheckNotification) {
-		fmt.Println("terima notif")
 	})
 	fmt.Print(err)
 }

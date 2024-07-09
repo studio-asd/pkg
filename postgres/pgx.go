@@ -22,7 +22,7 @@ var _ pgx.QueryTracer = (*PgxQueryTracer)(nil)
 //
 // Copy protocol documentation: https://www.postgresql.org/docs/current/sql-copy.html#:~:text=COPY%20moves%20data%20between%20PostgreSQL,results%20of%20a%20SELECT%20query.
 func (p *Postgres) CopyFromRows(ctx context.Context, table string, columns []string, values [][]interface{}) (rnum int64, err error) {
-	if p.pgx == nil {
+	if !p.IsPgx() {
 		err = errors.New("copyFromRows can only be used when using pgx driver")
 		return
 	}

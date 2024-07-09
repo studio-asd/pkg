@@ -18,6 +18,16 @@ import (
 //
 // The idea of concurrent services is not to disturb the main runner to schedule and watch the concurrent
 // starts and stops of the services. So we can offload the logic and complexity completely to this service.
+//
+// |------------------|
+// |Concurrent Service|
+// |------------------|
+// |    Service_1     | -------------v
+// |------------------|        |-----------|         |---------|
+// |    Service_2     | -----> |Error Group| ------> |Goroutine|
+// |------------------|        |-----------|         |---------|
+// |    Service_3     |---------------^
+// |------------------|
 type ConcurrentServices struct {
 	services     []*ServiceStateTracker
 	runnerLogger *slog.Logger
@@ -53,6 +63,7 @@ func (c *ConcurrentServices) Register(services ...ServiceRunnerAware) error {
 		if _, ok := svc.(*ServiceStateTracker); ok {
 			return errors.New("cannot use service state tracker as the type of concurrent services")
 		}
+		// Wrap each service in a service state tracker because we want the behavior to be the same.
 		s := newServiceStateTracker(svc, c.runnerLogger)
 		c.services = append(c.services, s)
 	}
@@ -248,8 +259,10 @@ func (l *LongRunningTask) Run(ctx context.Context) error {
 		// to exit.
 		select {
 		case <-l.stopCtx.Done():
+			l.stopC <- struct{}{}
 			return errLongRunningTaskStopDeadline
 		case err := <-errC:
+			l.stopC <- struct{}{}
 			return err
 		}
 	case err := <-errC:
@@ -273,7 +286,8 @@ func (l *LongRunningTask) Ready(ctx context.Context) error {
 	return nil
 }
 
-// Stop cancels the long running task context created in the run function.
+// Stop cancels the long running task context created in the run function. The function will block until
+// the function receive stop timeout or the runner exit.
 //
 // The function receive a context and will use that context for the deadline to stop.
 // If the deadline exceeds, then it will just exit without waiting for the running goroutine
@@ -281,14 +295,16 @@ func (l *LongRunningTask) Ready(ctx context.Context) error {
 // they also listening to the context cacellation being passed by the Run function.
 func (l *LongRunningTask) Stop(ctx context.Context) error {
 	l.stopMu.Lock()
+	defer l.stopMu.Unlock()
 	if l.stopped {
-		l.stopMu.Unlock()
 		return nil
 	}
 
 	l.stopCtx = ctx
 	l.stopC <- struct{}{}
-	l.stopMu.Unlock()
+	// Block the exit until the long running task exit. Runner have the ability to timeout the stop
+	// request, so its okay to block here.
+	<-l.stopC
 	return nil
 }
 

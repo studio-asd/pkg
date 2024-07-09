@@ -88,8 +88,7 @@ var (
 	// is not exiting within the duration.
 	errLongRunningTaskStopDeadline = errors.New("long_running_task: stop deadline exceeded")
 	// errUnhealthyService is used when we are failed to check the service health for the first time.
-	errUnhealthyService = errors.New("healthcheck: service is not healthy")
-	// errInvalidStateOrder is used when the service is not in a desired state when a function to change state is triggered.
+	errUnhealthyService  = errors.New("healthcheck: service is not healthy")
 	errInvalidStateOrder = errors.New("service is not in a desired state")
 )
 
@@ -129,12 +128,30 @@ type ServiceRunnerAware interface {
 	Stop(context.Context) error
 }
 
+// RunInfo interface provides an interface for the service to provide the srun information when the service is running.
+// The information then will be written by srun to stdout as a log through slog.
+type RunInfo interface {
+	RunInfo() map[string]string
+}
+
 // ServiceUpgraderAware defines service that aware with the existence of an upgrader in the service runner.
 // The service then delegates the setup of net.Listener to the upgrader because the upgrader need to pass all
 // file descriptors to the new process.
 type ServiceUpgraderAware interface {
 	RequiredListener() (network, addr string)
 	RegisterListener(listener net.Listener)
+}
+
+// AdminItf introduces the administration interface to set readiness and healthcheck of the application.
+// Typically, the interface interacts with the admin server to set these values.
+type AdminItf interface {
+	// SetHealthcheckFunc sets the function to check whether the service is healthy or not. This usually needed
+	// when we are using platforms that continuously checks the state of our service.
+	SetHealthCheckFunc(func() error)
+	// SetReadinessFunc sets the function to check whether the service is ready or not. This usually needed
+	// when we are using platforms that cares about the service readiness to start delivering requests to our
+	// service once its ready.
+	SetReadinessFunc(func() error)
 }
 
 // ServiceRunner interface is a special type of interface that implemented by its own package to minimize the
@@ -145,19 +162,34 @@ type ServiceUpgraderAware interface {
 type ServiceRunner interface {
 	Register(services ...ServiceRunnerAware) error
 	Context() Context
+	Admin() AdminItf
 }
 
+// Registrar implements ServiceRunner.
 type Registrar struct {
 	runner  *Runner
 	context Context
 }
 
+// Register calls internal runner register function to register services to the runner.
 func (r *Registrar) Register(services ...ServiceRunnerAware) error {
 	return r.runner.register(services...)
 }
 
+// Context returns the runner context given to the runner.
 func (r *Registrar) Context() Context {
 	return r.context
+}
+
+// Admin returns AdminItf interface because we want to reuse the adminHTTPServer struct and use it
+// externally.
+func (r *Registrar) Admin() AdminItf {
+	// If the admin server is disabled somehow, then we return an empty admin server to not break the
+	// client logic. This won't be straightforward for the user, but their program doesn't break.
+	if r.runner.adminServer == nil {
+		return &adminHTTPServer{}
+	}
+	return r.runner.adminServer
 }
 
 func newRegistrar(r *Runner) *Registrar {
@@ -187,6 +219,8 @@ type Runner struct {
 
 	// upgrader instance to allow the program to self-upgrade using cloudflare/tableflip.
 	upgrader *upgrader
+	// adminServer instance to allow the program to expose several important endpoints for program diagnostics.
+	adminServer *adminHTTPServer
 
 	// otelTracer is open telemetry tracer instance to collect trace spans in application.
 	otelTracer trace.Tracer
@@ -377,47 +411,43 @@ func (r *Runner) register(services ...ServiceRunnerAware) error {
 	return group.Wait()
 }
 
-// onceRegisterServices ensure the default service registration happening only once.
-var onceRegisterServices sync.Once
-
 func (r *Runner) registerDefaultServices(otelTracerProvider, otelMeterProvider *LongRunningTask) error {
 	var err error
-	onceRegisterServices.Do(func() {
-		// If the length of the admin configuration is not disabled, then we should always register
-		// the http admin server.
-		//
-		// This way, the admin http server will always at the bottom of the stack and will be shuted-down last. This means
-		// many things:
-		//	1. The prometheus metrics is available in shutting down mode.
-		//	2. The profile export is available in shutting down mode.
-		//	3. We can listen/watch to the service shutdown.
-		if !r.config.Admin.Disable {
-			var adminServer *adminHTTPServer
-			adminServer, err = newAdminServer(r.config.Admin.AdminServerConfig)
-			if err != nil {
-				return
-			}
-			r.services = append(r.services, newServiceStateTracker(adminServer, r.logger))
+	// If the length of the admin configuration is not disabled, then we should always register
+	// the http admin server.
+	//
+	// This way, the admin http server will always at the bottom of the stack and will be shuted-down last. This means
+	// many things:
+	//	1. The prometheus metrics is available in shutting down mode.
+	//	2. The profile export is available in shutting down mode.
+	//	3. We can listen/watch to the service shutdown.
+	if !r.config.Admin.Disable {
+		var adminServer *adminHTTPServer
+		adminServer, err = newAdminServer(r.config.Admin.AdminServerConfig)
+		if err != nil {
+			return err
 		}
-		// If the healthcheck is not disabled, then we should spawn a healthcheck service.
-		if r.config.Healthcheck.Enabled {
-			hcs := newHealthcheckService(r.config.Healthcheck)
-			r.services = append(r.services, newServiceStateTracker(hcs, r.logger))
-			r.healthcheckService = hcs
-		}
-		// If the opentelemetry is not disabled, then start the open telemetry process using the long running task.
-		if otelTracerProvider != nil {
-			r.services = append(r.services, newServiceStateTracker(otelTracerProvider, r.logger))
-		}
-		// If the metric provider is not nil then we should listen to the shutdown event and shutdown the provider properly.
-		if otelMeterProvider != nil {
-			r.services = append(r.services, newServiceStateTracker(otelMeterProvider, r.logger))
-		}
-		// Listen to the upgrader to upgrade the binary using SIGHUP.
-		if r.upgrader != nil {
-			r.services = append(r.services, newServiceStateTracker(r.upgrader, r.logger))
-		}
-	})
+		r.adminServer = adminServer
+		r.services = append(r.services, newServiceStateTracker(adminServer, r.logger))
+	}
+	// If the healthcheck is not disabled, then we should spawn a healthcheck service.
+	if r.config.Healthcheck.Enabled {
+		hcs := newHealthcheckService(r.config.Healthcheck)
+		r.services = append(r.services, newServiceStateTracker(hcs, r.logger))
+		r.healthcheckService = hcs
+	}
+	// If the opentelemetry is not disabled, then start the open telemetry process using the long running task.
+	if otelTracerProvider != nil {
+		r.services = append(r.services, newServiceStateTracker(otelTracerProvider, r.logger))
+	}
+	// If the metric provider is not nil then we should listen to the shutdown event and shutdown the provider properly.
+	if otelMeterProvider != nil {
+		r.services = append(r.services, newServiceStateTracker(otelMeterProvider, r.logger))
+	}
+	// Listen to the upgrader to upgrade the binary using SIGHUP.
+	if r.upgrader != nil {
+		r.services = append(r.services, newServiceStateTracker(r.upgrader, r.logger))
+	}
 	return err
 }
 
@@ -437,6 +467,7 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 		// Ensure no context is leaking and not cancelled.
 		r.ctxSignalCancel()
 
+		var stackTrace []byte
 		v := recover()
 		if v != nil {
 			errRecover, ok := v.(error)
@@ -447,6 +478,7 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 				err = errors.Join(err, fmt.Errorf("%v", v))
 				err = errors.Join(err, errPanic)
 			}
+			stackTrace = debug.Stack()
 		}
 		// Check if th error is expected or not upon exit. Because we send the cancelled context error
 		// with cause to determine why the program exit.
@@ -454,9 +486,10 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 			return
 		}
 
-		stackTrace := debug.Stack()
 		// Wrap the error with additional information of stack trace.
-		err = fmt.Errorf("%w\n\n%s", err, string(stackTrace))
+		if stackTrace != nil {
+			err = fmt.Errorf("%w\n\n%s", err, string(stackTrace))
+		}
 	}()
 
 	// If the deadline duration of the runner is not zero, then we should respect the deadline. By using deadline, it means the program
@@ -464,7 +497,11 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 	//
 	// The deadline is being set here to be as close as possible to the run function.
 	if r.config.DeadlineDuration > 0 {
-		r.ctxSignal, r.ctxSignalCancel = context.WithDeadlineCause(r.ctxSignal, time.Now().Add(r.config.DeadlineDuration), errRunDeadlineTimeout)
+		r.ctxSignal, r.ctxSignalCancel = context.WithDeadlineCause(
+			r.ctxSignal,
+			time.Now().Add(r.config.DeadlineDuration),
+			errRunDeadlineTimeout,
+		)
 	}
 
 	err = run(r.ctxSignal, newRegistrar(r))
@@ -584,7 +621,7 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 					time.Sleep(readyCheckBackoff)
 					continue
 				}
-				readyC <- nil
+				readyC <- err
 				return
 			}
 		}()
@@ -667,20 +704,12 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 func (r *Runner) MustRun(run func(ctx context.Context, runner ServiceRunner) error) {
 	err := r.Run(run)
 	if err != nil {
+		slog.Error("GOIND HERE")
 		slog.Error(err.Error())
 		os.Exit(1)
 	}
+	slog.Error("NO ERROR")
 	os.Exit(0)
-}
-
-// buildContext receive a service runner aware and build a special runner context just for the service.
-func (r *Runner) buildContext(svc ServiceRunnerAware) Context {
-	logger := r.logger.WithGroup(svc.Name())
-	return Context{
-		Logger: logger,
-		Tracer: r.otelTracer,
-		Meter:  r.otelMeter,
-	}
 }
 
 // isError returns true if the error is not expected by the runner. This function is needed and a bit unfortunate because
@@ -706,6 +735,7 @@ func isError(err error) bool {
 // ServiceStateTracker wraps the actual service type/interface to track the state of the service.
 type ServiceStateTracker struct {
 	ServiceRunnerAware
+	stopMu sync.Mutex
 	mu     sync.RWMutex
 	state  serviceState
 	logger *slog.Logger
@@ -754,9 +784,6 @@ func (s *ServiceStateTracker) State() serviceState {
 }
 
 func (s *ServiceStateTracker) Init(ctx Context) error {
-	if s.getState() != serviceStateStopped {
-		return fmt.Errorf("%w: expecting %s state but got %s", errInvalidStateOrder, serviceStateStopped, s.getState())
-	}
 	s.setState(serviceStateInitiating)
 	s.logger.Info(fmt.Sprintf("[Service] %s: %s...", s.Name(), s.State()))
 	err := s.ServiceRunnerAware.Init(ctx)
@@ -770,13 +797,28 @@ func (s *ServiceStateTracker) Init(ctx Context) error {
 
 func (s *ServiceStateTracker) Run(ctx context.Context) error {
 	if s.getState() != serviceStateInitiated {
-		return fmt.Errorf("%w: expecting %s state but got %s", errInvalidStateOrder, serviceStateInitiated, s.getState())
-	}
-	if s.getState() >= serviceStateStarting && s.getState() <= serviceStateRunning {
-		return errServiceRunnerAlreadyRunning
+		if s.getState() >= serviceStateStarting && s.getState() <= serviceStateRunning {
+			return errServiceRunnerAlreadyRunning
+		}
+		return fmt.Errorf("[run] %w: expecting %s state but got %s", errInvalidStateOrder, serviceStateInitiated, s.getState())
 	}
 	s.setState(serviceStateStarting)
-	s.logger.Info(fmt.Sprintf("[Service] %s: %s...", s.Name(), s.State()))
+
+	// Check whether the service is implementing run info, if yes then we should add the information to log attributes.
+	var attrs []slog.Attr
+	rifo, ok := s.ServiceRunnerAware.(RunInfo)
+	if ok {
+		for k, v := range rifo.RunInfo() {
+			attrs = append(attrs, slog.String(k, v))
+		}
+	}
+	s.logger.LogAttrs(
+		ctx,
+		slog.LevelInfo,
+		fmt.Sprintf("[Service] %s: %s...", s.Name(), s.State()),
+		attrs...,
+	)
+
 	err := s.ServiceRunnerAware.Run(ctx)
 	return err
 }
@@ -795,10 +837,10 @@ func (s *ServiceStateTracker) Ready(ctx context.Context) error {
 		<-time.After(time.Millisecond * 300)
 	}
 	if s.getState() != serviceStateStarting {
-		return fmt.Errorf("%w: expecting %s state", errInvalidStateOrder, serviceStateStarting)
-	}
-	if s.getState() == serviceStateRunning {
-		return nil
+		if s.getState() == serviceStateRunning {
+			return nil
+		}
+		return fmt.Errorf("[ready] %w: expecting %s state", errInvalidStateOrder, serviceStateStarting)
 	}
 	err := s.ServiceRunnerAware.Ready(ctx)
 	if err != nil {
@@ -814,15 +856,16 @@ func (s *ServiceStateTracker) Ready(ctx context.Context) error {
 // Stop overrides the ServiceRunnerAware stop to ensure we tracked the state of the service
 // inside the tracker object.
 func (s *ServiceStateTracker) Stop(ctx context.Context) error {
+	s.stopMu.Lock()
+	defer s.stopMu.Unlock()
+
 	if s.getState() == serviceStateStopped {
 		return nil
 	}
 	if s.getState() == serviceStateShutdown {
-		return errors.New("service is in shutting down state")
+		return errors.New("[stop] service is in shutting down state")
 	}
-	if s.getState() != serviceStateRunning {
-		return fmt.Errorf("%w: expecting %s state", errInvalidStateOrder, serviceStateRunning)
-	}
+
 	s.setState(serviceStateShutdown)
 	s.logger.Info(fmt.Sprintf("[Service] %s: %s...", s.Name(), s.State()))
 	err := s.ServiceRunnerAware.Stop(ctx)

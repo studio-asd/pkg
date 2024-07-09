@@ -177,7 +177,7 @@ func TestBulkUpdate(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		values = append(values, i, i)
 	}
-	err := testPG.Transact(ctx, sql.LevelDefault, func(tx *Postgres) error {
+	err := testPG.Transact(ctx, sql.LevelDefault, func(ctx context.Context, tx *Postgres) error {
 		return tx.BulkInsert(ctx, "bulk_update", cols, values, "")
 	})
 	if err != nil {
@@ -191,7 +191,7 @@ func TestBulkUpdate(t *testing.T) {
 		updateVals[1] = append(updateVals[1], -i)
 	}
 
-	err = testPG.Transact(ctx, sql.LevelDefault, func(tx *Postgres) error {
+	err = testPG.Transact(ctx, sql.LevelDefault, func(ctx context.Context, tx *Postgres) error {
 		return tx.BulkUpdate(ctx, "bulk_update", cols, []string{"INT", "INT"}, updateVals)
 	})
 	if err != nil {

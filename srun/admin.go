@@ -56,16 +56,6 @@ func (c *AdminServerConfig) validate() error {
 	if reflect.ValueOf(c.HTTPServerConfig).IsZero() {
 		c.HTTPServerConfig = adminHTTPServerDefaultConfig
 	}
-	if c.ReadinessFunc == nil {
-		c.ReadinessFunc = func() error {
-			return nil
-		}
-	}
-	if c.HealthcheckFunc == nil {
-		c.HealthcheckFunc = func() error {
-			return nil
-		}
-	}
 	return nil
 }
 
@@ -176,7 +166,7 @@ func (a *adminHTTPServer) handler() *http.ServeMux {
 	// Prometheus metrics endpoint.
 	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
 		// If the metrics endpoint is disabled, we will return non 200(OK) status code.
-		if !a.config.prometheusHandlerDisabled {
+		if a.config.prometheusHandlerDisabled {
 			w.WriteHeader(http.StatusNotImplemented)
 			w.Write([]byte("NOT IMPLEMENTED"))
 			return
@@ -184,6 +174,9 @@ func (a *adminHTTPServer) handler() *http.ServeMux {
 		promhttp.Handler().ServeHTTP(w, r)
 	})
 	// Pprof endpoints.
+	mux.HandleFunc("GET /debug/pprof", func(w http.ResponseWriter, r *http.Request) {
+		pprof.Index(w, r)
+	})
 	mux.HandleFunc("GET /debug/cmdline", func(w http.ResponseWriter, r *http.Request) {
 		pprof.Cmdline(w, r)
 	})

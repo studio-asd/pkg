@@ -15,85 +15,16 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/lib/pq"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 )
-
-const (
-	defaultMaxOpenConns = 10
-)
-
-// ConnectConfig stores the configuration to create a new connection to PostgreSQL database.
-type ConnectConfig struct {
-	Driver          string
-	Username        string
-	Password        string
-	Host            string
-	Port            string
-	DBName          string
-	SearchPath      string
-	SSLMode         string
-	MaxOpenConns    int
-	ConnMaxIdletime time.Duration
-	ConnMaxLifetime time.Duration
-	Tracer          trace.Tracer
-}
-
-func (c *ConnectConfig) copy() ConnectConfig {
-	return *c
-}
-
-func (c *ConnectConfig) validate() error {
-	if c.Username == "" {
-		return errors.New("postgres: username cannot be empty")
-	}
-	if c.Password == "" {
-		return errors.New("postgres: password cannot be empty")
-	}
-	if c.Host == "" {
-		return errors.New("postgres: host cannot be empty")
-	}
-	if c.Port == "" {
-		return errors.New("postgres: port cannot be empty")
-	}
-
-	switch c.Driver {
-	case "postgres", "libpq", "pgx":
-	default:
-		return fmt.Errorf("postgres: driver %s is not supported", c.Driver)
-	}
-	// Normalize the driver from 'libpq' and other drivers, because we will only support 'postgres'.
-	if c.Driver == "libpq" {
-		c.Driver = "postgres"
-	}
-	if c.SSLMode == "" {
-		c.SSLMode = "disable"
-	}
-
-	// Overrides values.
-	if c.MaxOpenConns == 0 {
-		c.MaxOpenConns = defaultMaxOpenConns
-	}
-	return nil
-}
-
-// DSN returns the PostgreSQL DSN.
-//
-//	For example: postgres://username:password@localhost:5432/mydb?sslmode=false.
-func (c *ConnectConfig) DSN() (url string, dsn DSN, err error) {
-	url = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s", c.Username, c.Password, c.Host, c.Port, c.DBName, c.SSLMode)
-	if c.SearchPath != "" {
-		url = url + "&search_path=" + c.SearchPath
-	}
-	dsn, err = ParseDSN(url)
-	return
-}
 
 type Postgres struct {
 	config *ConnectConfig
@@ -102,6 +33,7 @@ type Postgres struct {
 	pgx *pgxpool.Pool
 	tx  Transaction
 
+	tracer trace.Tracer
 	// searchPathMu protects set of the searchpath.
 	searchPathMu sync.RWMutex
 	searchPath   string // default schema separated by comma.
@@ -139,8 +71,8 @@ func Connect(ctx context.Context, connConfig ConnectConfig) (*Postgres, error) {
 	if err != nil {
 		return nil, err
 	}
-	if config.Tracer != nil {
-		tracer = config.Tracer
+	if config.TracerConfig.Tracer != nil {
+		tracer = config.TracerConfig.Tracer
 	}
 
 	switch config.Driver {
@@ -187,6 +119,7 @@ func Connect(ctx context.Context, connConfig ConnectConfig) (*Postgres, error) {
 		config:     config,
 		db:         db,
 		pgx:        pgxdb,
+		tracer:     tracer,
 		searchPath: "public",
 	}
 	return p, nil
@@ -196,23 +129,42 @@ func (p *Postgres) Query(ctx context.Context, query string, params ...any) (*Row
 	return p.query(ctx, query, params...)
 }
 
-func (p *Postgres) query(ctx context.Context, query string, params ...any) (*RowsCompat, error) {
+func (p *Postgres) query(ctx context.Context, query string, params ...any) (rc *RowsCompat, err error) {
+	spanCtx, span := p.tracer.Start(
+		ctx,
+		"postgres.query",
+		trace.WithSpanKind(trace.SpanKindInternal),
+	)
+	defer func() {
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
 	if p.tx != nil {
-		return p.tx.Query(ctx, query, params...)
+		span.SetAttributes(p.tx.SpanAttributes()...)
+		rc, err = p.tx.Query(spanCtx, query, params...)
+		return
 	}
 
+	span.SetAttributes(p.config.TracerConfig.traceAttributesFromContext(ctx, query, params...)...)
 	if p.pgx != nil {
-		rows, err := p.pgx.Query(ctx, query, params...)
-		if err != nil {
-			return nil, err
+		rows, queryErr := p.pgx.Query(spanCtx, query, params...)
+		if queryErr != nil {
+			err = queryErr
+			return
 		}
-		return &RowsCompat{pgxRows: rows}, err
+		rc = &RowsCompat{pgxRows: rows}
+		return
 	}
-	rows, err := p.db.QueryContext(ctx, query, params...)
-	if err != nil {
-		return nil, err
+	rows, queryErr := p.db.QueryContext(ctx, query, params...)
+	if queryErr != nil {
+		err = queryErr
+		return
 	}
-	return &RowsCompat{rows: rows}, nil
+	rc = &RowsCompat{rows: rows}
+	return
 }
 
 func (p *Postgres) RunQuery(ctx context.Context, query string, f func(*RowsCompat) error, params ...any) error {
@@ -230,35 +182,63 @@ func (p *Postgres) RunQuery(ctx context.Context, query string, f func(*RowsCompa
 }
 
 func (p *Postgres) QueryRow(ctx context.Context, query string, params ...any) *RowCompat {
+	spanCtx, span := p.tracer.Start(
+		ctx,
+		"postgres.queryRow",
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(attribute.String("query", query)),
+	)
+	defer span.End()
+
 	if p.tx != nil {
-		return p.tx.QueryRow(ctx, query, params...)
+		span.SetAttributes(p.tx.SpanAttributes()...)
+		return p.tx.QueryRow(spanCtx, query, params...)
 	}
 
+	span.SetAttributes(p.config.TracerConfig.traceAttributesFromContext(ctx, query, params...)...)
 	if p.pgx != nil {
-		row := p.pgx.QueryRow(ctx, query, params...)
+		row := p.pgx.QueryRow(spanCtx, query, params...)
 		return &RowCompat{pgxRow: row}
 	}
-	row := p.db.QueryRowContext(ctx, query, params...)
+	row := p.db.QueryRowContext(spanCtx, query, params...)
 	return &RowCompat{row: row}
 }
 
-func (p *Postgres) Exec(ctx context.Context, query string, params ...any) (*ExecResultCompat, error) {
+func (p *Postgres) Exec(ctx context.Context, query string, params ...any) (ec *ExecResultCompat, err error) {
+	spanCtx, span := p.tracer.Start(
+		ctx,
+		"postgres.exec",
+		trace.WithSpanKind(trace.SpanKindInternal),
+	)
+	defer func() {
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
 	if p.tx != nil {
-		return p.tx.Exec(ctx, query, params...)
+		span.SetAttributes(p.tx.SpanAttributes()...)
+		return p.tx.Exec(spanCtx, query, params...)
 	}
 
+	span.SetAttributes(p.config.TracerConfig.traceAttributesFromContext(ctx, query, params...)...)
 	if p.pgx != nil {
-		tag, err := p.pgx.Exec(ctx, query, params...)
-		if err != nil {
-			return nil, err
+		tag, execErr := p.pgx.Exec(spanCtx, query, params...)
+		if execErr != nil {
+			err = execErr
+			return
 		}
-		return &ExecResultCompat{pgxResult: tag}, nil
+		ec = &ExecResultCompat{pgxResult: tag}
+		return
 	}
-	result, err := p.db.ExecContext(ctx, query, params...)
-	if err != nil {
-		return nil, err
+	result, execErr := p.db.ExecContext(spanCtx, query, params...)
+	if execErr != nil {
+		err = execErr
+		return
 	}
-	return &ExecResultCompat{result: result}, nil
+	ec = &ExecResultCompat{result: result}
+	return
 }
 
 // Transaction interface ensure the pgx and sql/db tx object is compatible so we can use them both inside
@@ -269,35 +249,106 @@ type Transaction interface {
 	Exec(ctx context.Context, query string, params ...any) (*ExecResultCompat, error)
 	QueryRow(ctx context.Context, query string, params ...any) *RowCompat
 	Query(ctx context.Context, query string, params ...any) (*RowsCompat, error)
+	SpanAttributes() []attribute.KeyValue
 }
 
-func (p *Postgres) Transact(ctx context.Context, iso sql.IsolationLevel, txFunc func(*Postgres) error) error {
+func (p *Postgres) Transact(ctx context.Context, iso sql.IsolationLevel, txFunc func(context.Context, *Postgres) error) error {
 	err := p.transact(ctx, iso, txFunc)
 	return err
 }
 
-func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc func(*Postgres) error) error {
+func (p *Postgres) beginTx(ctx context.Context, iso sql.IsolationLevel) (tx *TransactCompat, err error) {
+	spanAttrs := p.config.TracerConfig.traceAttributesFromContext(ctx, "")
+	spanAttrs = append(
+		spanAttrs,
+		attribute.String("postgres.tx_iso_level", iso.String()),
+		attribute.Bool("postgres.in_transaction", true),
+	)
+
+	spanCtx, span := p.tracer.Start(
+		ctx,
+		"postgres.beginTx",
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(spanAttrs...),
+	)
+	defer func() {
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
+	if p.pgx != nil {
+		var pgxTx pgx.Tx
+		pgxTx, beginErr := p.pgx.BeginTx(spanCtx, pgx.TxOptions{IsoLevel: sqlIsoLevelToPgxIsoLevel(iso)})
+		if err != nil {
+			err = beginErr
+			return
+		}
+		tx = &TransactCompat{
+			pgxTx:  pgxTx,
+			ctx:    spanCtx,
+			tracer: p.tracer,
+			// Load span attributes once, without the query name and also the arguments. So we don't have to load
+			// all the attributes again in each operation.
+			spanAttrs: spanAttrs,
+		}
+		return
+	}
+	stdlibTx, beginErr := p.db.BeginTx(spanCtx, &sql.TxOptions{Isolation: iso})
+	if err != nil {
+		err = beginErr
+		return
+	}
+	tx = &TransactCompat{
+		tx:     stdlibTx,
+		ctx:    spanCtx,
+		tracer: p.tracer,
+		// Load span attributes once, without the query name and also the arguments. So we don't have to load
+		// all the attributes again in each operation.
+		spanAttrs: spanAttrs,
+	}
+	return
+}
+
+func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc func(context.Context, *Postgres) error) (err error) {
 	if p.InTransaction() {
 		return errors.New("a DB Transact function was called on a DB already in a transaction")
 	}
 
-	var tx Transaction
-	var err error
+	spanCtx, span := p.tracer.Start(
+		ctx,
+		"postgres.transact",
+		trace.WithSpanKind(trace.SpanKindInternal),
+	)
+	defer func() {
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
 
-	if p.pgx != nil {
-		var pgxTx pgx.Tx
-		pgxTx, err = p.pgx.BeginTx(ctx, pgx.TxOptions{IsoLevel: sqlIsoLevelToPgxIsoLevel(iso)})
-		if err != nil {
-			return err
-		}
-		tx = &TransactCompat{pgxTx: pgxTx}
-	} else {
-		stdlibTx, err := p.db.BeginTx(ctx, &sql.TxOptions{Isolation: iso})
-		if err != nil {
-			return err
-		}
-		tx = &TransactCompat{tx: stdlibTx}
+	tx, beginErr := p.beginTx(spanCtx, iso)
+	if beginErr != nil {
+		err = beginErr
+		return
 	}
+	// After we create the transaction object, the transaction object need to be closed by either commit or rollback
+	// the query. So its better to use defer to ensure this.
+	defer func() {
+		if err == nil {
+			return
+		}
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			rollbackErr = fmt.Errorf("failed to rollback: %w", rollbackErr)
+			// Rollback error is a different error, join the error with the actual error.
+			err = errors.Join(err, rollbackErr)
+		}
+	}()
+
+	// Set the transaction span attributes including all metadata and informations. The downside of this is, the postgres.transact
+	// span won't have any metadata inside it.
+	span.SetAttributes(tx.SpanAttributes()...)
 
 	// Create a new copy of Postgres and add the transaction object inside the object. This will make InTransaction() check to be true.
 	newPG := &Postgres{
@@ -308,38 +359,60 @@ func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc 
 		pgx:        p.pgx,
 		tx:         tx,
 	}
-	err = txFunc(newPG)
+	err = txFunc(spanCtx, newPG)
 	if err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			rollbackErr = fmt.Errorf("failed to rollback: %w", rollbackErr)
-			// Rollback error is a different error, join the error with the actual error.
-			err = errors.Join(err, rollbackErr)
-		}
-		return err
+		return
 	}
 	err = tx.Commit()
 	if err != nil {
-		return fmt.Errorf("failed to commit: %w", err)
+		err = fmt.Errorf("failed to commit: %w", err)
+		return
 	}
-	return nil
+	return
 }
 
-func (p *Postgres) Prepare(ctx context.Context, query string) (*StmtCompat, error) {
+func (p *Postgres) Prepare(ctx context.Context, query string) (sc *StmtCompat, err error) {
+	spanCtx, span := p.tracer.Start(
+		ctx,
+		"postgres.prepare",
+		trace.WithSpanKind(trace.SpanKindInternal),
+	)
+	defer func() {
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
 	if p.pgx != nil {
-		return &StmtCompat{sql: query, pgxdb: p.pgx}, nil
+		return &StmtCompat{sql: query, pgxdb: p.pgx, ctx: spanCtx, tracer: p.config.TracerConfig}, nil
 	}
-	stmt, err := p.db.PrepareContext(ctx, query)
+	stmt, err := p.db.PrepareContext(spanCtx, query)
 	if err != nil {
 		return nil, err
 	}
-	return &StmtCompat{stmt: stmt}, nil
+	return &StmtCompat{stmt: stmt, ctx: spanCtx, tracer: p.config.TracerConfig}, nil
 }
 
-func (p *Postgres) Ping(ctx context.Context) error {
+func (p *Postgres) Ping(ctx context.Context) (err error) {
+	spanCtx, span := p.tracer.Start(
+		ctx,
+		"postgres.ping",
+		trace.WithSpanKind(trace.SpanKindInternal),
+	)
+	span.SetAttributes(p.config.TracerConfig.traceAttributesFromContext(ctx, "")...)
+	defer func() {
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
 	if p.pgx != nil {
-		return p.pgx.Ping(ctx)
+		err = p.pgx.Ping(spanCtx)
+		return
 	}
-	return p.db.PingContext(ctx)
+	err = p.db.PingContext(spanCtx)
+	return
 }
 
 // setDefaultSearchPath sets the default schema for the current connection.

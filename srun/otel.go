@@ -9,11 +9,11 @@ import (
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/metric/noop"
+	meternoop "go.opentelemetry.io/otel/metric/noop"
 	metricsdk "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.25.0"
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
@@ -97,7 +97,7 @@ type OtelMetricConfig struct {
 // The function returns otel provider as LongRunningTask as we need to shut it down when the program stops to properly flush all metrics.
 func newOtelMetricMeterAndProviderService(config OtelMetricConfig) (metric.Meter, *LongRunningTask, error) {
 	if config.Disable {
-		return noop.NewMeterProvider().Meter("noop"), nil, nil
+		return meternoop.NewMeterProvider().Meter("noop"), nil, nil
 	}
 	promExporter, err := prometheus.New()
 	if err != nil {

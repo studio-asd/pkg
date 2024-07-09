@@ -12,11 +12,14 @@ const (
 	LogFormatJSON = "json"
 )
 
+const defaultLogLevel = slog.LevelError
+
 // LoggerConfig configures log/slog logger and put the configuration result as the default logger to slog.
 type LoggerConfig struct {
 	Format     string // Either a 'text' or 'json'. We use 'json' by default.
 	RemoveTime bool   // Removes the time from logger.
 	AddSource  bool   // Adds source code location when logging.
+	Level      slog.Level
 	// Output overrides and control the output of the program log. By default, all logs will be sent to os.Stderr.
 	Output io.Writer
 }
@@ -46,12 +49,20 @@ func setDefaultSlog(config LoggerConfig) {
 		output = config.Output
 	}
 
+	logLevel := config.Level
+	switch logLevel {
+	case slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError:
+	default:
+		logLevel = slog.LevelError
+	}
+
 	switch strings.ToLower(config.Format) {
 	case LogFormatJSON:
 		handler = slog.NewJSONHandler(
 			output, &slog.HandlerOptions{
 				AddSource:   config.AddSource,
 				ReplaceAttr: replacerFunc,
+				Level:       logLevel,
 			},
 		)
 	case LogFormatText:
@@ -60,6 +71,7 @@ func setDefaultSlog(config LoggerConfig) {
 			&slog.HandlerOptions{
 				AddSource:   config.AddSource,
 				ReplaceAttr: replacerFunc,
+				Level:       logLevel,
 			},
 		)
 	}

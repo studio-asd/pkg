@@ -9,6 +9,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // RowsCompat implements Rows to maintain the compatibility with sql.Rows.
@@ -115,43 +118,95 @@ type StmtCompat struct {
 	sql   string
 	pgxdb *pgxpool.Pool
 	stmt  *sql.Stmt
+
+	// pgx specific, because pgx does not return a statement object.
+	pgxSQL string
+
+	ctx    context.Context
+	tracer *TracerConfig
 }
 
-func (s *StmtCompat) QueryContext(ctx context.Context, args ...any) (*RowsCompat, error) {
-	if s.pgxdb != nil {
-		rows, err := s.pgxdb.Query(ctx, s.sql, args...)
+func (s *StmtCompat) QueryContext(ctx context.Context, args ...any) (rc *RowsCompat, err error) {
+	spanCtx, span := s.tracer.Tracer.Start(
+		ctx,
+		"postgres.query",
+		trace.WithSpanKind(trace.SpanKindInternal),
+	)
+	span.SetAttributes(s.tracer.traceAttributesFromContext(ctx, "", args...)...)
+	defer func() {
 		if err != nil {
-			return nil, err
+			span.SetStatus(codes.Error, err.Error())
 		}
-		return &RowsCompat{pgxRows: rows}, nil
-	}
-	rows, err := s.stmt.QueryContext(ctx, args...)
-	if err != nil {
-		return nil, err
-	}
-	return &RowsCompat{rows: rows}, nil
-}
+		span.End()
+	}()
 
-func (s *StmtCompat) ExecContext(ctx context.Context, args ...any) (*ExecResultCompat, error) {
 	if s.pgxdb != nil {
-		result, err := s.pgxdb.Exec(ctx, s.sql, args...)
-		if err != nil {
-			return nil, err
+		rows, queryErr := s.pgxdb.Query(spanCtx, s.sql, args...)
+		if queryErr != nil {
+			err = queryErr
+			return
 		}
-		return &ExecResultCompat{pgxResult: result}, nil
+		rc = &RowsCompat{pgxRows: rows}
+		return
 	}
-	result, err := s.stmt.ExecContext(ctx, args...)
-	if err != nil {
-		return nil, err
+	rows, queryErr := s.stmt.QueryContext(spanCtx, args...)
+	if queryErr != nil {
+		err = queryErr
+		return
 	}
-	return &ExecResultCompat{result: result}, nil
+	rc = &RowsCompat{rows: rows}
+	return
 }
 
-func (s *StmtCompat) Close() error {
+func (s *StmtCompat) ExecContext(ctx context.Context, args ...any) (er *ExecResultCompat, err error) {
+	spanCtx, span := s.tracer.Tracer.Start(
+		ctx,
+		"postgres.exec",
+		trace.WithSpanKind(trace.SpanKindInternal),
+	)
+	defer func() {
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
+	if s.pgxdb != nil {
+		result, execErr := s.pgxdb.Exec(spanCtx, s.sql, args...)
+		if execErr != nil {
+			err = execErr
+			return
+		}
+		er = &ExecResultCompat{pgxResult: result}
+		return
+	}
+	result, execErr := s.stmt.ExecContext(ctx, args...)
+	if execErr != nil {
+		err = execErr
+		return
+	}
+	er = &ExecResultCompat{result: result}
+	return
+}
+
+func (s *StmtCompat) Close() (err error) {
+	_, span := s.tracer.Tracer.Start(
+		s.ctx,
+		"postgres.query",
+		trace.WithSpanKind(trace.SpanKindInternal),
+	)
+	defer func() {
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
 	if s.pgxdb != nil {
 		return nil
 	}
-	return s.stmt.Close()
+	err = s.stmt.Close()
+	return
 }
 
 // TransactCompat handle backwards compatibility guarantee of different postgreSQL libraries. The object doesn't really replicate the tx object
@@ -159,20 +214,54 @@ func (s *StmtCompat) Close() error {
 type TransactCompat struct {
 	tx    *sql.Tx
 	pgxTx pgx.Tx
+
+	ctx       context.Context
+	tracer    trace.Tracer
+	spanAttrs []attribute.KeyValue
 }
 
-func (t *TransactCompat) Rollback() error {
+func (t *TransactCompat) Rollback() (err error) {
+	spanCtx, span := t.tracer.Start(
+		t.ctx,
+		"postgres.rollback",
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(t.spanAttrs...),
+	)
+	defer func() {
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
 	if t.pgxTx != nil {
-		return t.pgxTx.Rollback(context.Background())
+		err = t.pgxTx.Rollback(spanCtx)
+		return
 	}
-	return t.tx.Rollback()
+	err = t.tx.Rollback()
+	return
 }
 
-func (t *TransactCompat) Commit() error {
+func (t *TransactCompat) Commit() (err error) {
+	spanCtx, span := t.tracer.Start(
+		t.ctx,
+		"postgres.commit",
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(t.spanAttrs...),
+	)
+	defer func() {
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
 	if t.pgxTx != nil {
-		return t.pgxTx.Commit(context.Background())
+		err = t.pgxTx.Commit(spanCtx)
+		return
 	}
-	return t.tx.Commit()
+	err = t.tx.Commit()
+	return
 }
 
 func (t *TransactCompat) Exec(ctx context.Context, query string, args ...any) (*ExecResultCompat, error) {
@@ -212,4 +301,8 @@ func (t *TransactCompat) QueryRow(ctx context.Context, query string, args ...any
 	}
 	row := t.tx.QueryRowContext(ctx, query, args...)
 	return &RowCompat{row: row}
+}
+
+func (t *TransactCompat) SpanAttributes() []attribute.KeyValue {
+	return t.spanAttrs
 }

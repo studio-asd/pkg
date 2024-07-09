@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"github.com/lib/pq"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const OnConflictDoNothing = "ON CONFLICT DO NOTHING"
@@ -75,8 +77,25 @@ func (p *Postgres) bulkInsert(ctx context.Context, table string, columns, return
 		return fmt.Errorf("too many columns to insert: %d", len(columns))
 	}
 
+	spanCtx, span := p.tracer.Start(
+		ctx,
+		"postgres.bulkInsert",
+		trace.WithSpanKind(trace.SpanKindInternal),
+	)
+	defer func() {
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+	if p.tx != nil {
+		span.SetAttributes(p.tx.SpanAttributes()...)
+	} else {
+		span.SetAttributes(p.config.TracerConfig.traceAttributesFromContext(ctx, "")...)
+	}
+
 	prepare := func(n int) (*StmtCompat, error) {
-		return p.Prepare(ctx, buildInsertQuery(table, columns, returningColumns, n, conflictAction))
+		return p.Prepare(spanCtx, buildInsertQuery(table, columns, returningColumns, n, conflictAction))
 	}
 
 	var stmt *StmtCompat
@@ -108,10 +127,10 @@ func (p *Postgres) bulkInsert(ctx context.Context, table string, columns, return
 		valueSlice := values[leftBound:rightBound]
 		var err error
 		if returningColumns == nil {
-			_, err = stmt.ExecContext(ctx, valueSlice...)
+			_, err = stmt.ExecContext(spanCtx, valueSlice...)
 		} else {
 			var rows *RowsCompat
-			rows, err = stmt.QueryContext(ctx, valueSlice...)
+			rows, err = stmt.QueryContext(spanCtx, valueSlice...)
 			if err != nil {
 				return err
 			}
@@ -171,8 +190,9 @@ func buildUpsertConflictAction(columns, conflictColumns []string) string {
 	return fmt.Sprintf("ON CONFLICT (%s) DO UPDATE SET %s",
 		strings.Join(conflictColumns, ", "),
 		strings.Join(sets, ", "))
+}
 
-} // maxBulkUpdateArrayLen is the maximum size of an array that BulkUpdate will send to
+// maxBulkUpdateArrayLen is the maximum size of an array that BulkUpdate will send to
 // Postgres. (Postgres has no size limit on arrays, but we want to keep the statements
 // to a reasonable size.)
 // It is a variable for testing.
@@ -203,7 +223,26 @@ func (p *Postgres) BulkUpdate(ctx context.Context, table string, columns, types 
 			return errors.New("all values slices must be the same length")
 		}
 	}
+
 	query := buildBulkUpdateQuery(table, columns, types)
+
+	spanCtx, span := p.tracer.Start(
+		ctx,
+		"postgres.bulkUpdate",
+		trace.WithSpanKind(trace.SpanKindInternal),
+	)
+	defer func() {
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+	if p.tx != nil {
+		span.SetAttributes(p.tx.SpanAttributes()...)
+	} else {
+		span.SetAttributes(p.config.TracerConfig.traceAttributesFromContext(ctx, "-")...)
+	}
+
 	for left := 0; left < nRows; left += maxBulkUpdateArrayLen {
 		right := left + maxBulkUpdateArrayLen
 		if right > nRows {
@@ -213,7 +252,7 @@ func (p *Postgres) BulkUpdate(ctx context.Context, table string, columns, types 
 		for _, vs := range values {
 			args = append(args, pq.Array(vs[left:right]))
 		}
-		if _, err := p.Exec(ctx, query, args...); err != nil {
+		if _, err := p.Exec(spanCtx, query, args...); err != nil {
 			return fmt.Errorf("db.Exec(%q, values[%d:%d]): %w", query, left, right, err)
 		}
 	}

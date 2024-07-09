@@ -151,6 +151,39 @@ func TestGracefulShutdown(t *testing.T) {
 			ServiceName: "testing_graceful_shutdown_timeout",
 			Admin:       AdminConfig{Disable: true},
 			OtelTracer:  OTelTracerConfig{Disable: true},
+			OtelMetric:  OtelMetricConfig{Disable: true},
+			Timeout: TimeoutConfig{
+				ShutdownGracefulPeriod: time.Second,
+			},
+		}
+		err := New(config).Run(func(ctx context.Context, runner ServiceRunner) error {
+			lrt1, err := NewLongRunningTask("exit early", func(ctx Context) error {
+				return errors.New("exit now")
+			})
+			if err != nil {
+				return err
+			}
+			lrt2, err := NewLongRunningTask("exit later", func(ctx Context) error {
+				time.Sleep(time.Second * 5)
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			return runner.Register(lrt2, lrt1)
+		})
+		if !errors.Is(err, errGracefulPeriodTimeout) {
+			t.Fatalf("expecting error %v but got %v", errGracefulPeriodTimeout, err)
+		}
+	})
+
+	t.Run("graceful_shutdown_no_timeout", func(t *testing.T) {
+		t.Parallel()
+		config := Config{
+			ServiceName: "testing_graceful_shutdown_timeout",
+			Admin:       AdminConfig{Disable: true},
+			OtelTracer:  OTelTracerConfig{Disable: true},
+			OtelMetric:  OtelMetricConfig{Disable: true},
 			Timeout: TimeoutConfig{
 				ShutdownGracefulPeriod: time.Second,
 			},
@@ -162,7 +195,7 @@ func TestGracefulShutdown(t *testing.T) {
 			})
 		})
 		if errors.Is(err, errGracefulPeriodTimeout) {
-			t.Fatalf("expecting error %v but got %v", errGracefulPeriodTimeout, err)
+			t.Fatalf("expecting error nil but got %v", err)
 		}
 	})
 }
@@ -247,6 +280,11 @@ func TestServiceStateTracker(t *testing.T) {
 		err  error
 	}{
 		{
+			name: "init",
+			fn:   func(ctx context.Context) error { return tracker.Init(Context{}) },
+			err:  nil,
+		},
+		{
 			name: "try to run",
 			fn:   tracker.Run,
 			err:  nil,
@@ -277,8 +315,18 @@ func TestServiceStateTracker(t *testing.T) {
 			err:  nil,
 		},
 		{
+			name: "try to init again",
+			fn:   func(ctx context.Context) error { return tracker.Init(Context{}) },
+			err:  nil,
+		},
+		{
 			name: "try to run again",
 			fn:   tracker.Run,
+			err:  nil,
+		},
+		{
+			name: "invoke ready again, after stopped",
+			fn:   tracker.Ready,
 			err:  nil,
 		},
 		{
@@ -314,10 +362,6 @@ func TestServiceStartOrder(t *testing.T) {
 		// Run.
 		if err := tracker.Run(context.Background()); err != nil {
 			t.Fatal(err)
-		}
-		// Stop before the service is ready/running.
-		if err := tracker.Stop(context.Background()); !errors.Is(err, errInvalidStateOrder) {
-			t.Fatalf("stop: expecting error %v but got %v", errInvalidStateOrder, err)
 		}
 		// Ready.
 		if err := tracker.Ready(context.Background()); err != nil {

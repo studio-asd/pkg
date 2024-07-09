@@ -37,6 +37,8 @@ type Baggage struct {
 	// valid is a flag to check whether the baggage is a valid baggage that created from the
 	// http header, gRPC metadata or something else that supported in the instrumentation package.
 	valid bool
+	// empty defines whether the baggage is empty or not, so we don't have to compare the struct.
+	empty bool
 }
 
 // ToSlogAttributes returns the slog attributes from the baggage.
@@ -81,6 +83,10 @@ func (b Baggage) ToTextMapCarrier() map[string]string {
 	return carrier
 }
 
+func (b Baggage) Empty() bool {
+	return b.empty
+}
+
 // BaggageFromTextMapCarrier creates a new baggage from text map carrier. This kind of format is used to easily inject them to
 // another protocol like HTTP(header) and gRPC(metadata). This is why several observability provider also use this kind of format.
 func BaggageFromTextMapCarrier(carrier map[string]string) Baggage {
@@ -99,7 +105,9 @@ func BaggageFromTextMapCarrier(carrier map[string]string) Baggage {
 func BaggageFromContext(ctx context.Context) Baggage {
 	baggage, ok := ctx.Value(baggageKey).(Baggage)
 	if !ok {
-		return Baggage{}
+		return Baggage{
+			empty: true,
+		}
 	}
 	return baggage
 }

@@ -2,8 +2,6 @@
 
 Service runner is a helper and steroid for `func main()` so the program can correctly listen to all `exit` signals and enable auto-upgrade via `SIGHUP(1/HUP)` via [tableflip](https://github.com/cloudflare/tableflip).
 
-The motivation to create the service runner coming from our usecase of running a large Go monolith on top of VM using `systemd`. Inside the applications, we have a lot of modules with some backgrund processes that we called `service`. Previously we are trying to manage all of the services one by one, and with this our code complexity bloats. After sometime we decided to create a `service operator` package on top of our services to reduce the code complexity.
-
 By using this package, it doesn't mean you won't need to manage the states and correctness inside your own package or `service`. You still to maintain them by correctly use all the functions provided by this package. For example, to shutdown a http server you still need to call `http.Server{}.Shutdown()` inside the `Stop` method.
 
 ## Requirements
@@ -102,12 +100,12 @@ When runner start services(`ServiceRunnerAware`), it will starts all services in
 
 ```
 |---------|
-|Service_1| <- This service will run first.
-|---------|
-|Service_2|
-|---------|
-|Service_3|
-|---------|
+| Service_1 | <- This service will run first. |
+| --------- |
+| Service_2 |
+| --------- |
+| Service_3 |
+| --------- |
 ```
 
 So, if your `gRPC` or `HTTP` server is at the bottom of the stack, it will start last. This ensures the program to be ready first before opening any connections to your application.
@@ -118,12 +116,12 @@ When runner stop all services, it will stop the services from bottom using LIFO 
 
 ```
 |---------|
-|Service_1|
-|---------|
-|Service_2|
-|---------|
-|Service_3| <- This service will be stopped first.
-|---------|
+| Service_1 |
+| --------- |
+| Service_2 |
+| --------- |
+| Service_3 | <- This service will be stopped first. |
+| --------- |
 ```
 
 If you have your `gRPC` or `HTTP` server at the bottom of the stack, it will stopped them first and ensure the program to handle all the requests. Then it will close all other resources.
@@ -170,12 +168,12 @@ It is possible for other services to consume healthcheck from other services. Wi
 
 For example:
 
-We have a `ledger` service that depends on `postgres` database, and a `wallet` service that depedns on the `ledger` service.
+We have a `ledger` service that depends on `postgres` database, and a `wallet` service that depends on the `ledger` service.
 
 ```mermaid
 flowchart TD
-    ls[Ledger Service] --depdends_on--> pg[Postgres]
-    ws[Wallet Service] --depdends_on--> ls
+    ls[Ledger Service] --depends_on--> pg[Postgres]
+    ws[Wallet Service] --depends_on--> ls
 ```
 
 So, when the `postgres` service is unhealthy for some reason, we the `ledger` service can immediately check the notification updates and set itself as `unhealthy`. And as soon as the `ledger` service is `unhealthy`, the `wallet` service can act accordingly to the `ledger` service status.
