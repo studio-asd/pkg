@@ -23,7 +23,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
-	"go.opentelemetry.io/otel/trace/noop"
 )
 
 type Postgres struct {
@@ -61,18 +60,14 @@ func Connect(ctx context.Context, connConfig ConnectConfig) (*Postgres, error) {
 	}
 
 	var (
-		db     *sql.DB
-		pgxdb  *pgxpool.Pool
-		err    error
-		tracer = noop.NewTracerProvider().Tracer("postgres")
+		db    *sql.DB
+		pgxdb *pgxpool.Pool
+		err   error
 	)
 
 	url, _, err := config.DSN()
 	if err != nil {
 		return nil, err
-	}
-	if config.TracerConfig.Tracer != nil {
-		tracer = config.TracerConfig.Tracer
 	}
 
 	switch config.Driver {
@@ -92,23 +87,6 @@ func Connect(ctx context.Context, connConfig ConnectConfig) (*Postgres, error) {
 		poolConfig.MaxConns = int32(config.MaxOpenConns)
 		poolConfig.MaxConnIdleTime = config.ConnMaxIdletime
 		poolConfig.MaxConnLifetime = config.ConnMaxLifetime
-		poolConfig.ConnConfig.Tracer = &PgxQueryTracer{
-			tracer: tracer,
-			dbInfo: struct {
-				user    string
-				host    string
-				port    string
-				dbName  string
-				sslMode string
-			}{
-				user:    config.Username,
-				host:    config.Host,
-				port:    config.Port,
-				dbName:  config.DBName,
-				sslMode: config.SSLMode,
-			},
-		}
-
 		pgxdb, err = pgxpool.NewWithConfig(context.Background(), poolConfig)
 		if err != nil {
 			return nil, err
@@ -119,7 +97,7 @@ func Connect(ctx context.Context, connConfig ConnectConfig) (*Postgres, error) {
 		config:     config,
 		db:         db,
 		pgx:        pgxdb,
-		tracer:     tracer,
+		tracer:     config.TracerConfig.Tracer,
 		searchPath: "public",
 	}
 	return p, nil
@@ -250,6 +228,7 @@ type Transaction interface {
 	QueryRow(ctx context.Context, query string, params ...any) *RowCompat
 	Query(ctx context.Context, query string, params ...any) (*RowsCompat, error)
 	SpanAttributes() []attribute.KeyValue
+	Prepare(ctx context.Context, query string) (*StmtCompat, error)
 }
 
 func (p *Postgres) Transact(ctx context.Context, iso sql.IsolationLevel, txFunc func(context.Context, *Postgres) error) error {
@@ -288,7 +267,7 @@ func (p *Postgres) beginTx(ctx context.Context, iso sql.IsolationLevel) (tx *Tra
 		tx = &TransactCompat{
 			pgxTx:  pgxTx,
 			ctx:    spanCtx,
-			tracer: p.tracer,
+			tracer: p.config.TracerConfig,
 			// Load span attributes once, without the query name and also the arguments. So we don't have to load
 			// all the attributes again in each operation.
 			spanAttrs: spanAttrs,
@@ -303,7 +282,7 @@ func (p *Postgres) beginTx(ctx context.Context, iso sql.IsolationLevel) (tx *Tra
 	tx = &TransactCompat{
 		tx:     stdlibTx,
 		ctx:    spanCtx,
-		tracer: p.tracer,
+		tracer: p.config.TracerConfig,
 		// Load span attributes once, without the query name and also the arguments. So we don't have to load
 		// all the attributes again in each operation.
 		spanAttrs: spanAttrs,
@@ -358,6 +337,7 @@ func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc 
 		db:         p.db,
 		pgx:        p.pgx,
 		tx:         tx,
+		tracer:     p.tracer,
 	}
 	err = txFunc(spanCtx, newPG)
 	if err != nil {
@@ -384,6 +364,9 @@ func (p *Postgres) Prepare(ctx context.Context, query string) (sc *StmtCompat, e
 		span.End()
 	}()
 
+	if p.tx != nil {
+		return p.tx.Prepare(ctx, query)
+	}
 	if p.pgx != nil {
 		return &StmtCompat{sql: query, pgxdb: p.pgx, ctx: spanCtx, tracer: p.config.TracerConfig}, nil
 	}

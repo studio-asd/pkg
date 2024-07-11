@@ -115,18 +115,18 @@ func (e *ExecResultCompat) RowsAffected() (int64, error) {
 }
 
 type StmtCompat struct {
-	sql   string
-	pgxdb *pgxpool.Pool
-	stmt  *sql.Stmt
+	sql         string
+	pgxdb       *pgxpool.Pool
+	pgxTx       pgx.Tx
+	pgxStmtDesc *pgconn.StatementDescription
 
-	// pgx specific, because pgx does not return a statement object.
-	pgxSQL string
+	stmt *sql.Stmt
 
 	ctx    context.Context
 	tracer *TracerConfig
 }
 
-func (s *StmtCompat) QueryContext(ctx context.Context, args ...any) (rc *RowsCompat, err error) {
+func (s *StmtCompat) Query(ctx context.Context, args ...any) (rc *RowsCompat, err error) {
 	spanCtx, span := s.tracer.Tracer.Start(
 		ctx,
 		"postgres.query",
@@ -140,6 +140,15 @@ func (s *StmtCompat) QueryContext(ctx context.Context, args ...any) (rc *RowsCom
 		span.End()
 	}()
 
+	if s.pgxTx != nil {
+		rows, queryErr := s.pgxTx.Query(spanCtx, s.pgxStmtDesc.SQL, args...)
+		if queryErr != nil {
+			err = queryErr
+			return
+		}
+		rc = &RowsCompat{pgxRows: rows}
+		return
+	}
 	if s.pgxdb != nil {
 		rows, queryErr := s.pgxdb.Query(spanCtx, s.sql, args...)
 		if queryErr != nil {
@@ -158,7 +167,7 @@ func (s *StmtCompat) QueryContext(ctx context.Context, args ...any) (rc *RowsCom
 	return
 }
 
-func (s *StmtCompat) ExecContext(ctx context.Context, args ...any) (er *ExecResultCompat, err error) {
+func (s *StmtCompat) Exec(ctx context.Context, args ...any) (er *ExecResultCompat, err error) {
 	spanCtx, span := s.tracer.Tracer.Start(
 		ctx,
 		"postgres.exec",
@@ -171,6 +180,15 @@ func (s *StmtCompat) ExecContext(ctx context.Context, args ...any) (er *ExecResu
 		span.End()
 	}()
 
+	if s.pgxTx != nil {
+		result, execErr := s.pgxTx.Exec(spanCtx, s.pgxStmtDesc.SQL, args...)
+		if execErr != nil {
+			err = execErr
+			return
+		}
+		er = &ExecResultCompat{pgxResult: result}
+		return
+	}
 	if s.pgxdb != nil {
 		result, execErr := s.pgxdb.Exec(spanCtx, s.sql, args...)
 		if execErr != nil {
@@ -202,7 +220,7 @@ func (s *StmtCompat) Close() (err error) {
 		span.End()
 	}()
 
-	if s.pgxdb != nil {
+	if s.pgxdb != nil || s.pgxTx != nil {
 		return nil
 	}
 	err = s.stmt.Close()
@@ -216,12 +234,12 @@ type TransactCompat struct {
 	pgxTx pgx.Tx
 
 	ctx       context.Context
-	tracer    trace.Tracer
+	tracer    *TracerConfig
 	spanAttrs []attribute.KeyValue
 }
 
 func (t *TransactCompat) Rollback() (err error) {
-	spanCtx, span := t.tracer.Start(
+	spanCtx, span := t.tracer.Tracer.Start(
 		t.ctx,
 		"postgres.rollback",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -243,7 +261,7 @@ func (t *TransactCompat) Rollback() (err error) {
 }
 
 func (t *TransactCompat) Commit() (err error) {
-	spanCtx, span := t.tracer.Start(
+	spanCtx, span := t.tracer.Tracer.Start(
 		t.ctx,
 		"postgres.commit",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -303,6 +321,37 @@ func (t *TransactCompat) QueryRow(ctx context.Context, query string, args ...any
 	return &RowCompat{row: row}
 }
 
+func (t *TransactCompat) Prepare(ctx context.Context, query string) (*StmtCompat, error) {
+	if t.pgxTx != nil {
+		// We currently put the cached query name the same as the query. This will definitely make the cache-key(map) to be
+		// very big and inefficient.
+		//
+		// Probably we should just expose name in the future, so the user can define it. But the stdlib doesn't actually support
+		// this, but maybe that's okay.
+		stmtDesc, err := t.pgxTx.Prepare(ctx, query, query)
+		if err != nil {
+			return nil, err
+		}
+		return &StmtCompat{
+			ctx:         t.ctx,
+			pgxTx:       t.pgxTx,
+			pgxStmtDesc: stmtDesc,
+			tracer:      t.tracer,
+		}, nil
+	}
+	stmt, err := t.tx.PrepareContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return &StmtCompat{
+		ctx:    t.ctx,
+		stmt:   stmt,
+		tracer: t.tracer,
+	}, nil
+}
+
+// SpanAttributes returns all attributes of the spans inside a transaction. The span is saved inside the transaction because
+// a single session is used within a transaction, and it have the same attributes across the session.
 func (t *TransactCompat) SpanAttributes() []attribute.KeyValue {
 	return t.spanAttrs
 }

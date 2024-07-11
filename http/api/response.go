@@ -29,11 +29,11 @@ type Message interface {
 
 type ResponseTypeJSON struct{}
 
-func (r *ResponseTypeJSON) ResponseType() int {
+func (r ResponseTypeJSON) ResponseType() int {
 	return responseTypeJSON
 }
 
-func (r *ResponseTypeJSON) internalRequestResponse() {}
+func (r ResponseTypeJSON) internalRequestResponse() {}
 
 // jsonResponse is the internal json response that will be used to create the real
 // json response to the client.

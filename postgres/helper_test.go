@@ -18,8 +18,8 @@ import (
 
 func TestBulkInsert(t *testing.T) {
 	t.Parallel()
-	table := "test_bulk_insert"
 
+	table := "test_bulk_insert"
 	for _, test := range []struct {
 		name           string
 		columns        []string

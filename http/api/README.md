@@ -34,6 +34,62 @@ I18nMessage. Currently only support EN(English) and IDN(Indonesia).
 
 ## Response Type
 
+### JSON
+
+The JSON response is standarized to follow the format below.
+
+**OK(200)** response:
+
+```json
+{
+  "message": "some message",
+  "data": {
+      "key": "value"
+  }
+}
+```
+
+1. Message
+
+    Message can be used to communicate the result/intent of the APIs to the end user.
+
+2. Data
+
+    Data is the result of API request, it can be something that need to be shown to the end user.
+
+---
+
+**ERROR(Non-200)** response:
+
+```json
+{
+  "message": "error message",
+  "data": {
+    "key": "value"
+  },
+  "error": {
+    "code": "error_code",
+    "message": "error message",
+    "retry": {
+      "retryable": true,
+      "max_retry": 3
+    },
+    "errors": [
+      {
+        "message": "error message 1"
+      }
+      {
+        "message": "error message 2"
+      }
+    ]
+  }
+}
+```
+
+1. Message
+
+2. 
+
 ## Documentation First
 
 Documentation is hard, and we might need to do other things than making our

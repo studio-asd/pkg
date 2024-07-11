@@ -13,7 +13,12 @@ import (
 )
 
 const (
-	defaultMaxOpenConns = 10
+	// the default max connections inside postgres is 100(https://www.postgresql.org/docs/current/runtime-config-connection.html#GUC-MAX-CONNECTIONS).
+	// So we might want to keep the number low, and increase them in the configuration if needed.
+	defaultMaxOpenConns = 30
+	// some proxies set the default max conn idle time to 60 seconds, so we will put the same number here.
+	defaultConnMaxIdletime = time.Minute
+	defaultConnMaxLifetime = time.Minute * 30.
 )
 
 // ConnectConfig stores the configuration to create a new connection to PostgreSQL database.
@@ -63,12 +68,23 @@ func (c *ConnectConfig) validate() error {
 	if c.MaxOpenConns == 0 {
 		c.MaxOpenConns = defaultMaxOpenConns
 	}
+	if c.ConnMaxIdletime == 0 {
+		c.ConnMaxIdletime = defaultConnMaxIdletime
+	}
+	if c.ConnMaxLifetime == 0 {
+		c.ConnMaxLifetime = defaultConnMaxLifetime
+	}
 	if c.TracerConfig == nil {
 		c.TracerConfig = &TracerConfig{}
 	}
 	if err := c.TracerConfig.validate(); err != nil {
 		return err
 	}
+	// Inject the information to the tracer configuration as we want to inject these information
+	// when create spans.
+	c.TracerConfig.host = c.Host
+	c.TracerConfig.user = c.Username
+	c.TracerConfig.database = c.DBName
 	return nil
 }
 
@@ -90,6 +106,11 @@ type TracerConfig struct {
 	Tracer trace.Tracer
 	// RecordArgs is a flag to records the query arguments.
 	RecordArgs bool
+
+	// below configurations are injected to enrich the trace/span atrrbutes.
+	host     string
+	database string
+	user     string
 }
 
 func (t *TracerConfig) validate() error {
@@ -101,7 +122,12 @@ func (t *TracerConfig) validate() error {
 
 // traceAttributes returns the trace attributes from query and the query arguments.
 func (t *TracerConfig) traceAttributes(query string, args ...any) []attribute.KeyValue {
-	var attrs []attribute.KeyValue
+	// initial informations about the configuration and connection attributes.
+	attrs := []attribute.KeyValue{
+		attribute.String("pg.config.host", t.host),
+		attribute.String("pg.config.database", t.database),
+		attribute.String("pg.config.user", t.user),
+	}
 	if query != "" {
 		attrs = append(attrs, attribute.String("postgres.query", query))
 	}
@@ -116,9 +142,9 @@ func (t *TracerConfig) traceAttributesFromContext(ctx context.Context, query str
 	var attrs []attribute.KeyValue
 	b := instrumentation.BaggageFromContext(ctx)
 	if !b.Empty() {
-		attrs = append(attrs, attribute.String("request_id", b.RequestID))
-		attrs = append(attrs, attribute.String("api_name", b.APIName))
-		attrs = append(attrs, attribute.String("api_owner", b.APIOwner))
+		attrs = append(attrs, attribute.String("request.id", b.RequestID))
+		attrs = append(attrs, attribute.String("api.name", b.APIName))
+		attrs = append(attrs, attribute.String("api.owner", b.APIOwner))
 		if b.DebugID != "" {
 			attrs = append(attrs, attribute.String("debug_id", b.DebugID))
 		}

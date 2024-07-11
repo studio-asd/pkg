@@ -8,14 +8,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
-
-	"github.com/albertwidi/pkg/instrumentation"
 )
-
-var _ pgx.QueryTracer = (*PgxQueryTracer)(nil)
 
 // CopyFromRows use PostgreSQL COPY protocol to inserts data into the database. Overall, COPY is faster than INSERT, and should
 // be used if there are no rows conflict.
@@ -47,78 +40,6 @@ func (p *Postgres) CopyFromRows(ctx context.Context, table string, columns []str
 // IsPgx returns true if pgx is being used.
 func (p *Postgres) IsPgx() bool {
 	return p.pgx != nil
-}
-
-// PgxQueryTracer is the default tracer for pgx. Internally it uses open-telemetry to trace all the queries.
-type PgxQueryTracer struct {
-	tracer trace.Tracer
-	// excludeArgs will exlude the arguments from the tracing label. This means the arguments won't be visible
-	// inside the tracing view UI.
-	excludeArgs bool
-	// dbInfo contains database connection information to give more context/attributes to the tracer. Even though
-	// we have this information from pgx.Conn, the information is still in partial and we need to convert some of
-	// the information to string. Instead of doing that, pass all the information here.
-	dbInfo struct {
-		user    string
-		host    string
-		port    string
-		dbName  string
-		sslMode string
-	}
-}
-
-// TraceQueryStart will always be called at the start of query. The returned context from the function is meant to be propagated
-// to TraceQueryEnd so we can continue the span by using the context.
-func (t *PgxQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	// Retrieve the instrumentation baggage as we always set this to the context.
-	bg := instrumentation.BaggageFromContext(ctx)
-	attributes := []attribute.KeyValue{
-		attribute.String("pg.user", t.dbInfo.user),
-		attribute.String("pg.host", t.dbInfo.host),
-		attribute.String("pg.port", t.dbInfo.port),
-		attribute.String("pg.db_name", t.dbInfo.dbName),
-		attribute.String("pg.sslmode", t.dbInfo.sslMode),
-		attribute.String("pg.query", data.SQL),
-		attribute.String("request.id", bg.RequestID),
-		attribute.String("api.name", bg.APIName),
-		attribute.String("api.owner", bg.APIOwner),
-	}
-	// If the arguments is available and not excluded, then we will add them into the trace.
-	if data.Args != nil && !t.excludeArgs {
-		attributes = append(attributes, attribute.StringSlice("pg.query.args", queryArgsToStringSlice(data.Args)))
-	}
-
-	// We will not end the trace because the query have not yet started. We won't get the trace duration data if
-	// we end the trace here. Instead propagate the context and start a new span from context inside TraceQueryEnd
-	// function.
-	ctx, _ = t.tracer.Start(
-		ctx,
-		"pgx-otel",
-		trace.WithAttributes(attributes...),
-	)
-	return ctx
-}
-
-func (t *PgxQueryTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
-	attributes := []attribute.KeyValue{
-		attribute.String("pg.command", data.CommandTag.String()),
-	}
-	if data.Err != nil {
-		attributes = append(attributes, attribute.String("error", data.Err.Error()))
-		// Add more information if we found the error is actually a PgError.
-		var pgErr *pgconn.PgError
-		if errors.As(data.Err, &pgErr) {
-			attributes = append(
-				attributes,
-				attribute.String("pg_err.code", pgErr.Code),
-			)
-		}
-	} else {
-		attributes = append(attributes, attribute.Int64("pg.query.rows_affected", data.CommandTag.RowsAffected()))
-	}
-	span := trace.SpanFromContext(ctx)
-	span.SetAttributes(attributes...)
-	span.End()
 }
 
 // queryArgsToStringSlice returns args with type of any to a slice of string.

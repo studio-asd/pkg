@@ -127,10 +127,10 @@ func (p *Postgres) bulkInsert(ctx context.Context, table string, columns, return
 		valueSlice := values[leftBound:rightBound]
 		var err error
 		if returningColumns == nil {
-			_, err = stmt.ExecContext(spanCtx, valueSlice...)
+			_, err = stmt.Exec(spanCtx, valueSlice...)
 		} else {
 			var rows *RowsCompat
-			rows, err = stmt.QueryContext(spanCtx, valueSlice...)
+			rows, err = stmt.Query(spanCtx, valueSlice...)
 			if err != nil {
 				return err
 			}

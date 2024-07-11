@@ -42,6 +42,11 @@ func TestMain(m *testing.M) {
 		}
 
 		code := m.Run()
+		// Close the connection so we can drop the database. We will re-initiate the connection in each test
+		// loop, so its okay to close it here.
+		if err := testPG.Close(); err != nil {
+			log.Fatal(err)
+		}
 		if err := dropDatabase(context.Background(), config, testPGName); err != nil {
 			log.Fatal(err)
 		}
@@ -188,13 +193,11 @@ func createDatabase(ctx context.Context, config ConnectConfig, name string) (*Po
 	_, err = pg.Exec(ctx, query)
 	if err != nil && err != context.Canceled {
 		// If we got an error it might be because the database is still exist.
-		fmt.Println("DROPPING DATABASE")
 		errDrop := dropDatabase(ctx, config, name)
 		if errDrop != nil {
 			return nil, errors.Join(err, errDrop)
 		}
 		_, err = pg.Exec(ctx, query)
-		fmt.Println("GOt ERROR", err)
 	}
 	if err != nil {
 		err = fmt.Errorf("failed to create database: %w", err)
