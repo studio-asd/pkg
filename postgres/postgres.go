@@ -365,8 +365,11 @@ func (p *Postgres) Prepare(ctx context.Context, query string) (sc *StmtCompat, e
 	}()
 
 	if p.tx != nil {
+		span.SetAttributes(p.tx.SpanAttributes()...)
 		return p.tx.Prepare(ctx, query)
 	}
+
+	span.SetAttributes(p.config.TracerConfig.traceAttributesFromContext(ctx, query)...)
 	if p.pgx != nil {
 		return &StmtCompat{sql: query, pgxdb: p.pgx, ctx: spanCtx, tracer: p.config.TracerConfig}, nil
 	}
