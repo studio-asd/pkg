@@ -98,7 +98,7 @@ func Connect(ctx context.Context, connConfig ConnectConfig) (*Postgres, error) {
 		db:         db,
 		pgx:        pgxdb,
 		tracer:     config.TracerConfig.Tracer,
-		searchPath: "public",
+		searchPath: config.SearchPath,
 	}
 	return p, nil
 }

@@ -50,11 +50,17 @@ func (c *ConnectConfig) validate() error {
 	if c.Port == "" {
 		return errors.New("postgres: port cannot be empty")
 	}
+	if c.SearchPath == "" {
+		c.SearchPath = "public"
+	}
 
 	switch c.Driver {
 	case "postgres", "libpq", "pgx":
 	default:
-		return fmt.Errorf("postgres: driver %s is not supported", c.Driver)
+		if c.Driver == "" {
+			c.Driver = "<empty>"
+		}
+		return fmt.Errorf("postgres: driver %s is not supported. Please choose: postgres, libpq, pgx", c.Driver)
 	}
 	// Normalize the driver from 'libpq' and other drivers, because we will only support 'postgres'.
 	if c.Driver == "libpq" {

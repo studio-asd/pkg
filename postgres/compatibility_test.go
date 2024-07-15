@@ -23,11 +23,11 @@ func TestTxPreapredStatement(t *testing.T) {
 		A: 1,
 		B: 2,
 	}
-	got := data{}
 
 	t.Run("in_transact", func(t *testing.T) {
 		t.Parallel()
 
+		got := data{}
 		tableQuery := "CREATE TABLE transact_prepared(a INT, b INT);"
 		if _, err := testPG.Exec(context.Background(), tableQuery); err != nil {
 			t.Fatal(err)
@@ -62,6 +62,7 @@ func TestTxPreapredStatement(t *testing.T) {
 	t.Run("outside_transact", func(t *testing.T) {
 		t.Parallel()
 
+		got := data{}
 		tableQuery := "CREATE TABLE transact_prepared_2(a INT, b INT);"
 		if _, err := testPG.Exec(context.Background(), tableQuery); err != nil {
 			t.Fatal(err)
