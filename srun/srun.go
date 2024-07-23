@@ -309,6 +309,27 @@ type TimeoutConfig struct {
 	ShutdownGracefulPeriod time.Duration
 }
 
+// Error is a helper function that returns functions that satisfy srun.Run. The helper function can be used to easily wrap an error when
+// doing other operation in a function that runs run.Srun({fn}).
+//
+// For example:
+/*  func run() func(context.Context, srun.ServiceRunner) error {
+		var configFile string
+
+		flag.Parse()
+		flag.StringVar(&configFile, "config", "", "-config=path/to/config/file")
+		if configFile == "" {
+			return srun.Error(errors.New("config file cannot be empty"))
+		}
+		// Do something else.
+    }
+*/
+func Error(err error) func(ctx context.Context, sr ServiceRunner) error {
+	return func(ctx context.Context, sr ServiceRunner) error {
+		return err
+	}
+}
+
 // New creates a new service runner to control the lifecycle of the service.
 //
 // Please NOTE this function will panic if it encounter errors. This is expected by design as this function will

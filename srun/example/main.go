@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"log/slog"
 
 	"github.com/albertwidi/pkg/resources"
@@ -13,6 +15,7 @@ type Config struct {
 }
 
 func main() {
+	// srun.New().MustRun() wraps the main function and ensure everything is wrapped inside srun scope.
 	srun.New(srun.Config{
 		ServiceName: "testing",
 		Healthcheck: srun.HealthcheckConfig{
@@ -28,12 +31,23 @@ func main() {
 			Format: "json",
 			Level:  slog.LevelInfo,
 		},
-	}).MustRun(run(Config{}))
+	}).MustRun(run())
 }
 
-func run(config Config) func(context.Context, srun.ServiceRunner) error {
+// run function runs inside srun ensures all errors/operations are encapsulated within srun. Thus, if panic happens, the log of panic will also follows
+// the slog log configuration. This especially useful for centralized logging platform as multi-line logs are usually hard to read and need to be combined.
+func run() func(context.Context, srun.ServiceRunner) error {
+	var configFile string
+	var config Config
+
+	flag.Parse()
+	flag.StringVar(&configFile, "config", "", "-config=path/to/config/file")
+	if configFile == "" {
+		return srun.Error(errors.New("config file cannot be empty"))
+	}
+
 	return func(ctx context.Context, sr srun.ServiceRunner) error {
-		r, err := resources.New(config.Resources)
+		r, err := resources.New(ctx, config.Resources)
 		if err != nil {
 			return err
 		}
