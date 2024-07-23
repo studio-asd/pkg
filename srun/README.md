@@ -2,7 +2,7 @@
 
 Service runner is a helper and steroid for `func main()` so the program can correctly listen to all `exit` signals and enable auto-upgrade via `SIGHUP(1/HUP)` via [tableflip](https://github.com/cloudflare/tableflip).
 
-By using this package, it doesn't mean you won't need to manage the states and correctness inside your own package or `service`. You still to maintain them by correctly use all the functions provided by this package. For example, to shutdown a http server you still need to call `http.Server{}.Shutdown()` inside the `Stop` method.
+This package provides an `interface` for the `client`/`service` to implement so `runner` can track and control their `state` when needed. The goal of this package is to control the `state` of `service` correctly and not leaving any `resources` behind.
 
 ## Requirements
 
@@ -35,7 +35,8 @@ This package require Go 1.22+ as we use the new `http.ServeMux` to serve the adm
    Service runner package opens an `admin` port by default. The `admin` HTTP server serves multiple endpoints for:
 
    - Exposing `/metrics` for Prometheus metrics.
-   - Exposing `/health` for health-checking.
+   - Exposing `/health` for health-checks. This endpoint can be used by platform like `Kubernetes` or `Consul` to check whether the application is up and running.
+   - Exposing `/ready` for ready-checks. Some platform like `Kubernetes` usually use this endpoint to check whether they can start delivering traffic to the service or not.
    - Exposing `/debug/**` for profiling.
 
 ## Understanding Runner
@@ -49,6 +50,50 @@ In the code, `service` should iplement `ServiceRunnerAware` so it we can registe
 ### Self Upgrade
 
 The program can do self-upgrade via `SIGHUP(1)`, but the `service` need to understand about this. So, the service should implement `ServiceUpgradeAware` to ensure the upgrade is completed.
+
+### The Interface
+
+Runner provides an `interface` for the client to implement which called `ServiceRunnerAware`. If a `service` implements this `interface`, then it can be registered to the runner.
+
+In the `interface`, there are several methods that need to be supported:
+
+```go
+type ServiceRunnerAware interface {
+	Name() string
+	Init(Context) error
+	Run(context.Context) error
+	Ready(context.Context) error
+	Stop(context.Context) error
+}
+```
+
+1. Name
+
+   Name method returns the name string of the service. Runner need the service name to identify the service and put more context into its log.
+
+2. Init
+
+   Init receives `runner.Context` and pass it to the `service`. The `runner` pass several things inside the `Context`:
+
+   - OpenTelemetry trace client.
+   - OpenTelemetry metrics client.
+   - Slog logger.
+
+   > Runner doesn't expect Init to be blocking, it has internal timeout for Init function call.
+
+3. Run
+
+   Run runs the `service`. And up to the client, it can be blocking or non-blocking.
+
+4. Ready
+
+   Ready checks the `service` whether it is ready or not. As `runner` runs the `service` in FIFO order, it will only goes to the next `service` if the previous `service` is in the `ready` state.
+
+   > Runner doesn't expect Ready to be blocking, it has internal timeout for Ready function call.
+
+5. Stop
+
+   Stop stops the `service`. The `runner` will wait for the `service` to be stopped with a timeout, and hoping within that time the `service` already stopped. This to ensure the `runner` for not waiting forever.
 
 ### Service State
 
@@ -78,35 +123,38 @@ There are several `service` state tracked by the runner. The `state` are:
 
    This is when the `service` is completely stopped, which means the `Stop` function already returned.
 
-### When Init Is Called?
-
-The `Init` function is called when a `service` is being registered.
-
-```go
-func main() {
-	runner := New(srun.Config{})
-	runner.Run()
-}
-
-func run(ctx srun.Context, runner srun.ServiceRunner) error {
-	runner.Register() // <- This is when init is called.
-	return nil
-}
+```mermaid
+stateDiagram-v2
+   Stopped --> Initiating
+   note left of Stopped
+      Initial/end state for every service
+   end note
+   Initiating --> Initiated
+   note left of Initiating
+      Transition before invoking Init()
+   end note
+   Initiated --> Starting
+   note right of Initiated
+      After Init() returns nil
+   end note
+   note left of Starting
+      Transition before Run() invoked
+   end note
+   Starting --> Running
+   note right of Running
+      Transition after Ready() returns nil
+   end note
+   Running --> Stopped
 ```
 
-### Services Start
+### Services Start Order
 
 When runner start services(`ServiceRunnerAware`), it will starts all services in FIFO(First In First Out) order. For example, we have a stack looked like this:
 
-```
-|---------|
-| Service_1 | <- This service will run first. |
+| Service_1 (**Start First**) |
 | --------- |
 | Service_2 |
-| --------- |
-| Service_3 |
-| --------- |
-```
+| Service_3 (**Start Last**) |
 
 So, if your `gRPC` or `HTTP` server is at the bottom of the stack, it will start last. This ensures the program to be ready first before opening any connections to your application.
 
@@ -114,15 +162,10 @@ So, if your `gRPC` or `HTTP` server is at the bottom of the stack, it will start
 
 When runner stop all services, it will stop the services from bottom using LIFO approach(Last In First Out). By using this format, and if we use the [Services Start](#services-start) example, it should looked like this:
 
-```
-|---------|
-| Service_1 |
+| Service_1 (**Stopped Last**) |
 | --------- |
 | Service_2 |
-| --------- |
-| Service_3 | <- This service will be stopped first. |
-| --------- |
-```
+| **Service_3** (**Stopped First**) |
 
 If you have your `gRPC` or `HTTP` server at the bottom of the stack, it will stopped them first and ensure the program to handle all the requests. Then it will close all other resources.
 
@@ -130,19 +173,15 @@ If you have your `gRPC` or `HTTP` server at the bottom of the stack, it will sto
 
 Service runner provides several default services to help the user running a Go program. The default services aimed to help the user to:
 
-1. Set the `logger` configuration using `log/slog`.
-
-   Since Go 1.21.0, Go provide an official structured logging library called `slog`. We use this to provide a standard logging for the program.
-
-2. Self-upgrade the binary.
+1. Self-upgrade the binary.
 
    To self-upgrade itself, the program need to listen to `SIGHUP` signal to properly transfer all file descriptors to the child program and shutdown the parent.
 
-3. Start open-telemetry trace and metrics provider.
+1. Start open-telemetry trace and metrics provider.
 
    We want tracing and metrics collection to be available out of the box, and open-telemetry is an open and widely used standard.
 
-4. Provide `pprof` and `healthcheck` endpoint by spawning an additional `HTTP` server called `admin` in a different port(configurable).
+1. Provide `pprof`, `healthcheck`, and `ready` endpoint by spawning an additional `HTTP` server called `admin` in a different port(configurable).
 
    Usually a web service/server opens a different port to serve administrational endpoints. We want to provide similar things so user can use the server to do things like profiling(via pprof) and healthcheck.
 
@@ -205,3 +244,7 @@ func (s *Service) ConsumeHealthcheckNotification(fn HealthcheckNotifyFunc) error
 	return err
 }
 ```
+
+## Example
+
+You can look into the example [here](./example/main.go).

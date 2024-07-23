@@ -24,6 +24,12 @@ const (
 	defaultPostgresRetryDelay         = time.Second * 3
 )
 
+// PostgresResource provide more than one Postgres connections to provide primary and secondary connection
+// to the Postgres database. Usually, there are two kinds of connections, primary and secondary that used for
+// different purposes. Primary connection primarily used for 'write' and secondary connection primarily used for
+// 'read' operations.
+//
+// Please use Primary() and Secondary() method to safely retrieve the connection from the pool/array.
 type PostgresResource []*postgres.Postgres
 
 // Primary returns the primary connection to the user.
@@ -44,11 +50,13 @@ func (pr PostgresResource) Secondary() *postgres.Postgres {
 	return pr[0]
 }
 
+// postgresResources keeps all the PostgreSQL resources with name of the database as the key.
 type postgresResources struct {
 	mu sync.Mutex
 	db map[string]PostgresResource
 }
 
+// newPostgresResources creates new postgres resources object.
 func newpostgresResources() *postgresResources {
 	return &postgresResources{
 		db: make(map[string]PostgresResource),
@@ -61,6 +69,7 @@ func (sr *postgresResources) setPostgres(name string, dbs []*postgres.Postgres) 
 	sr.db[name] = dbs
 }
 
+// getPostgres retrieve a PostgreSQL database based on its name.
 func (sr *postgresResources) getPostgres(name string) (PostgresResource, error) {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
@@ -71,6 +80,7 @@ func (sr *postgresResources) getPostgres(name string) (PostgresResource, error) 
 	return db, nil
 }
 
+// close closes all resources of all PostgreSQL resources.
 func (sr *postgresResources) close() error {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()

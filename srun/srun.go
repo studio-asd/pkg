@@ -704,7 +704,6 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 func (r *Runner) MustRun(run func(ctx context.Context, runner ServiceRunner) error) {
 	err := r.Run(run)
 	if err != nil {
-		slog.Error("GOIND HERE")
 		slog.Error(err.Error())
 		os.Exit(1)
 	}

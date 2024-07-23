@@ -1,0 +1,7 @@
+resources:
+  postgres:
+    connects:
+      - name: testing_pg
+        driver: pgx
+        primary:
+          dsn: postgres://postgres:postgres@localhost:5432?sslmode=disable
