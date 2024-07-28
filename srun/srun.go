@@ -12,6 +12,7 @@ import (
 	"runtime/debug"
 	"sync"
 	"syscall"
+	"testing"
 	"time"
 
 	"go.opentelemetry.io/otel/metric"
@@ -37,12 +38,12 @@ type serviceState int
 func (s serviceState) String() string {
 	return []string{
 		"UNKNOWN_STATE",
-		"INITIATING",
-		"INITIATED",
-		"STARTING",
-		"RUNNING",
-		"SHUTTING DOWN",
-		"STOPPED",
+		"INITIATING",    // Before Init() is called.
+		"INITIATED",     // After Init() is called.
+		"STARTING",      // Before Run() is called.
+		"RUNNING",       // After Ready() is called.
+		"SHUTTING DOWN", // Before Stop() is called.
+		"STOPPED",       // After Stop() is called or initial state of the service.
 	}[s]
 }
 
@@ -196,7 +197,9 @@ func newRegistrar(r *Runner) *Registrar {
 	return &Registrar{
 		runner: r,
 		context: Context{
-			Logger: slog.Default().WithGroup(r.config.ServiceName),
+			// Assign a new logger from the default logger(we have configured this before), so each logger will have default attributes
+			// called 'logger_scope' to tell the scope of the logger.
+			Logger: slog.Default().With(slog.String("logger_scope", r.config.ServiceName)),
 			Meter:  r.otelMeter,
 			Tracer: r.otelTracer,
 		},
@@ -376,9 +379,11 @@ func New(config Config) *Runner {
 	}
 
 	r := &Runner{
-		serviceName:     config.ServiceName,
-		config:          conf,
-		logger:          slog.Default().WithGroup("service-runner"),
+		serviceName: config.ServiceName,
+		config:      conf,
+		// Assign a new logger from the default logger(we have configured this before), so each logger will have default attributes
+		// called 'logger_scope' to tell the scope of the logger.
+		logger:          slog.Default().With(slog.String("logger_scope", "service_runner")),
 		ctxSignal:       ctxSignal,
 		ctxSignalCancel: cancel,
 		upgrader:        upg,
@@ -598,8 +603,10 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 		initCtx, cancel := context.WithTimeout(r.ctxSignal, r.config.Timeout.InitTimeout)
 		go func() {
 			initContext := Context{
-				Ctx:            initCtx,
-				Logger:         r.logger.WithGroup(svc.Name()),
+				Ctx: initCtx,
+				// Assign a new logger from the default logger(we have configured this before), so each logger will have default attributes
+				// called 'logger_scope' to tell the scope of the logger.
+				Logger:         slog.Default().With(slog.String("logger_scope", svc.Name())),
 				Meter:          r.otelMeter,
 				Tracer:         r.otelTracer,
 				HealthNotifier: &HealthcheckNotifier{noop: true},
@@ -723,13 +730,17 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 
 // MustRun exit the program using exit 1. The function does not using panic because we don't want to print the stack trace and only the error.
 func (r *Runner) MustRun(run func(ctx context.Context, runner ServiceRunner) error) {
+	exitCode := 0
 	err := r.Run(run)
 	if err != nil {
 		slog.Error(err.Error())
-		os.Exit(1)
+		exitCode = 1
 	}
-	slog.Error("NO ERROR")
-	os.Exit(0)
+	// In test we can't invoke os.Exit(), to avoid error during test we will ignore the exit and just return.
+	if testing.Testing() {
+		return
+	}
+	os.Exit(exitCode)
 }
 
 // isError returns true if the error is not expected by the runner. This function is needed and a bit unfortunate because

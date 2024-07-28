@@ -8,6 +8,10 @@ This package provides an `interface` for the `client`/`service` to implement so 
 
 This package require Go 1.22+ as we use the new `http.ServeMux` to serve the admin server.
 
+## Example
+
+You can look into the example [here](./example/main.go).
+
 ## Features
 
 1. Graceful Shutdown
@@ -144,7 +148,11 @@ stateDiagram-v2
    note right of Running
       Transition after Ready() returns nil
    end note
-   Running --> Stopped
+   Running --> ShuttingDown 
+   note right of ShuttingDown
+      Transition before Stop() invoked
+   end note
+   ShuttingDown --> Stopped
 ```
 
 ### Services Start Order
@@ -244,7 +252,3 @@ func (s *Service) ConsumeHealthcheckNotification(fn HealthcheckNotifyFunc) error
 	return err
 }
 ```
-
-## Example
-
-You can look into the example [here](./example/main.go).

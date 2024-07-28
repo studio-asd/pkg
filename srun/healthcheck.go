@@ -395,6 +395,9 @@ type HealthcheckNotifierHandler struct {
 }
 
 func (h *HealthcheckNotifierHandler) handle(notif HealthcheckNotification) {
+	if h.filter == nil {
+		return
+	}
 	if _, ok := h.filter[notif.ServiceName]; !ok {
 		return
 	}

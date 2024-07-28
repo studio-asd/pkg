@@ -397,17 +397,30 @@ func TestServiceStartOrder(t *testing.T) {
 	})
 }
 
-type serviceDoNothing struct{}
-
-func (s *serviceDoNothing) Name() string {
-	return "service_do_nothing"
+type serviceDoNothing struct {
+	name   string
+	logger *slog.Logger
+	onRun  func(ctx context.Context, sdn *serviceDoNothing) error
 }
 
-func (s *serviceDoNothing) Init(Context) error {
+func (s *serviceDoNothing) Name() string {
+	if s.name == "" {
+		return "service_do_nothing"
+	}
+	return s.name
+}
+
+func (s *serviceDoNothing) Init(ctx Context) error {
+	s.logger = ctx.Logger
 	return nil
 }
 
 func (s *serviceDoNothing) Run(ctx context.Context) error {
+	if s.onRun != nil {
+		if err := s.onRun(ctx, s); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -417,4 +430,90 @@ func (s *serviceDoNothing) Ready(ctx context.Context) error {
 
 func (s *serviceDoNothing) Stop(ctx context.Context) error {
 	return nil
+}
+
+func TestServiceLogScope(t *testing.T) {
+	t.Run("srun logger", func(t *testing.T) {
+		buff := bytes.NewBuffer(nil)
+		expectLog := `level=INFO msg="this is a log" logger_scope=service_runner
+`
+		s := New(Config{
+			ServiceName: "log_group",
+			Logger: LoggerConfig{
+				Output:     buff,
+				RemoveTime: true,
+			},
+		})
+		s.logger.Info("this is a log")
+
+		got := buff.String()
+		if diff := cmp.Diff(expectLog, got); diff != "" {
+			t.Fatalf("(-want/+got)\n%s", diff)
+		}
+	})
+
+	t.Run("registrar logger", func(t *testing.T) {
+		buff := bytes.NewBuffer(nil)
+		expectLog := `level=INFO msg="this is a log" logger_scope=log_group
+`
+
+		r := newRegistrar(New(Config{
+			ServiceName: "log_group",
+			Logger: LoggerConfig{
+				Output:     buff,
+				RemoveTime: true,
+			},
+		}))
+		r.context.Logger.Info("this is a log")
+
+		got := buff.String()
+		if diff := cmp.Diff(expectLog, got); diff != "" {
+			t.Fatalf("(-want/+got)\n%s", diff)
+		}
+	})
+
+	t.Run("service logger", func(t *testing.T) {
+		buff := bytes.NewBuffer(nil)
+		expectLog := `level=INFO msg="Running program: log_group" logger_scope=service_runner
+level=INFO msg="[Service] a_service: INITIATING..." logger_scope=service_runner
+level=INFO msg="[Service] a_service: INITIATED" logger_scope=service_runner
+level=INFO msg="[Service] a_service: RUNNING" logger_scope=service_runner
+level=INFO msg="[Service] a_service: STARTING..." logger_scope=service_runner
+level=INFO msg="this is a log" logger_scope=a_service
+level=INFO msg="[Service] a_service: SHUTTING DOWN..." logger_scope=service_runner
+level=INFO msg="[Service] a_service: STOPPED" logger_scope=service_runner
+`
+
+		s := New(Config{
+			ServiceName: "log_group",
+			Admin: AdminConfig{
+				Disable: true,
+			},
+			OtelTracer: OTelTracerConfig{
+				Disable: true,
+			},
+			OtelMetric: OtelMetricConfig{
+				Disable: true,
+			},
+			Logger: LoggerConfig{
+				Output:     buff,
+				RemoveTime: true,
+			},
+		})
+		s.MustRun(func(ctx context.Context, runner ServiceRunner) error {
+			sdn := &serviceDoNothing{
+				name: "a_service",
+				onRun: func(ctx context.Context, sdn *serviceDoNothing) error {
+					sdn.logger.Info("this is a log")
+					return nil
+				},
+			}
+			return runner.Register(sdn)
+		})
+
+		got := buff.String()
+		if diff := cmp.Diff(expectLog, got); diff != "" {
+			t.Fatalf("(-want/+got)\n%s", diff)
+		}
+	})
 }

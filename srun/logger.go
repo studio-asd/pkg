@@ -12,7 +12,7 @@ const (
 	LogFormatJSON = "json"
 )
 
-const defaultLogLevel = slog.LevelError
+const defaultLogLevel = slog.LevelInfo
 
 // LoggerConfig configures log/slog logger and put the configuration result as the default logger to slog.
 type LoggerConfig struct {
@@ -53,7 +53,7 @@ func setDefaultSlog(config LoggerConfig) {
 	switch logLevel {
 	case slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError:
 	default:
-		logLevel = slog.LevelError
+		logLevel = defaultLogLevel
 	}
 
 	switch strings.ToLower(config.Format) {
