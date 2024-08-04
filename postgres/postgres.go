@@ -17,16 +17,17 @@ import (
 	"sync"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
 
 type Postgres struct {
-	config *ConnectConfig
+	config ConnectConfig
 
 	db  *sql.DB
 	pgx *pgxpool.Pool
@@ -49,12 +50,13 @@ func (p *Postgres) InTransaction() bool {
 
 // Config returns the copy of connection configuration.
 func (p *Postgres) Config() ConnectConfig {
-	return *p.config
+	copyConfig := p.config
+	copyConfig.isCopy = true
+	return copyConfig
 }
 
 // Connect returns connected Postgres object.
-func Connect(ctx context.Context, connConfig ConnectConfig) (*Postgres, error) {
-	config := &connConfig
+func Connect(ctx context.Context, config ConnectConfig) (*Postgres, error) {
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
@@ -164,7 +166,6 @@ func (p *Postgres) QueryRow(ctx context.Context, query string, params ...any) *R
 		ctx,
 		"postgres.queryRow",
 		trace.WithSpanKind(trace.SpanKindInternal),
-		trace.WithAttributes(attribute.String("query", query)),
 	)
 	defer span.End()
 
@@ -458,4 +459,17 @@ func (p *Postgres) StdlibDB() *sql.DB {
 	// The pgx version will create a whole new connection instead of using the current one.
 	copyConf := p.pgx.Config().Copy()
 	return stdlib.OpenDB(*copyConf.ConnConfig)
+}
+
+// IsPQError returns whether the error is a PostgreSQL internal error or not.
+func IsPQError(err error) (string, bool) {
+	var pgerr *pgconn.PgError
+	if errors.As(err, &pgerr) {
+		return pgerr.Code, true
+	}
+	var pqerr *pq.Error
+	if errors.As(err, &pqerr) {
+		return string(pqerr.Code), true
+	}
+	return "", false
 }

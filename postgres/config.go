@@ -23,6 +23,7 @@ const (
 
 // ConnectConfig stores the configuration to create a new connection to PostgreSQL database.
 type ConnectConfig struct {
+	isCopy          bool
 	Driver          string
 	Username        string
 	Password        string
@@ -34,7 +35,9 @@ type ConnectConfig struct {
 	MaxOpenConns    int
 	ConnMaxIdletime time.Duration
 	ConnMaxLifetime time.Duration
-	TracerConfig    *TracerConfig
+	// TracerConfig holds the tracer configuration along with otel tracer inside it. We use pointer for the tracer config because
+	// the configuration will be used in several hot-path and we don't want the values to are copied all over again.
+	TracerConfig *TracerConfig
 }
 
 func (c *ConnectConfig) validate() error {
@@ -85,6 +88,9 @@ func (c *ConnectConfig) validate() error {
 	}
 	if err := c.TracerConfig.validate(); err != nil {
 		return err
+	}
+	if c.isCopy {
+		return nil
 	}
 	// Inject the information to the tracer configuration as we want to inject these information
 	// when create spans.
