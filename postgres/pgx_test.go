@@ -8,6 +8,9 @@ import (
 )
 
 func TestCopyFrom(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
 	t.Parallel()
 
 	// Dont' test the feature if pgx driver is not used.

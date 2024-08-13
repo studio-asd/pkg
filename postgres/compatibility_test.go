@@ -13,6 +13,9 @@ import (
 // the transaction or not. Both prepared statements and transaction live inside a session/connection, so we can use
 // prepared statements that not prepared inside the transaction.
 func TestTxPreapredStatement(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
 	t.Parallel()
 
 	type data struct {

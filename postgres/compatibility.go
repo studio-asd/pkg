@@ -28,11 +28,18 @@ func (r *RowsCompat) Close() error {
 	return r.rows.Close()
 }
 
-func (r *RowsCompat) Err() error {
+func (r *RowsCompat) Err() (err error) {
+	defer func() {
+		if err != nil {
+			err = ErrToPostgresError(err)
+		}
+	}()
 	if r.pgxRows != nil {
-		return r.pgxRows.Err()
+		err = r.pgxRows.Err()
+		return
 	}
-	return r.rows.Close()
+	err = r.rows.Err()
+	return
 }
 
 func (r *RowsCompat) Next() bool {
@@ -45,8 +52,9 @@ func (r *RowsCompat) Next() bool {
 func (r *RowsCompat) Scan(dest ...any) error {
 	if r.pgxRows != nil {
 		err := r.pgxRows.Scan(dest...)
+		// Append the error with sql.ErrNoRows so we can keep using errors.Is(error, sql.ErrNoRows).
 		if err != nil {
-			// Append the error with sql.ErrNoRows so we can keep using errors.Is(error, sql.ErrNoRows).
+			err = ErrToPostgresError(err)
 			if errors.Is(err, pgx.ErrNoRows) {
 				err = errors.Join(err, sql.ErrNoRows)
 			}
@@ -54,7 +62,7 @@ func (r *RowsCompat) Scan(dest ...any) error {
 		}
 		return err
 	}
-	return r.rows.Scan(dest...)
+	return ErrToPostgresError(r.rows.Scan(dest...))
 }
 
 type RowCompat struct {
@@ -67,13 +75,14 @@ func (r *RowCompat) Scan(dest ...any) error {
 		err := r.pgxRow.Scan(dest...)
 		// Append the error with sql.ErrNoRows so we can keep using errors.Is(error, sql.ErrNoRows).
 		if err != nil {
+			err = ErrToPostgresError(err)
 			if errors.Is(err, pgx.ErrNoRows) {
 				err = errors.Join(err, sql.ErrNoRows)
 			}
 		}
 		return err
 	}
-	return r.row.Scan(dest...)
+	return ErrToPostgresError(r.row.Scan(dest...))
 }
 
 func sqlIsoLevelToPgxIsoLevel(iso sql.IsolationLevel) pgx.TxIsoLevel {
@@ -136,6 +145,7 @@ func (s *StmtCompat) Query(ctx context.Context, args ...any) (rc *RowsCompat, er
 	defer func() {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
+			err = ErrToPostgresError(err)
 		}
 		span.End()
 	}()
@@ -176,6 +186,7 @@ func (s *StmtCompat) Exec(ctx context.Context, args ...any) (er *ExecResultCompa
 	defer func() {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
+			err = ErrToPostgresError(err)
 		}
 		span.End()
 	}()
@@ -248,6 +259,7 @@ func (t *TransactCompat) Rollback() (err error) {
 	defer func() {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
+			err = ErrToPostgresError(err)
 		}
 		span.End()
 	}()
@@ -270,6 +282,7 @@ func (t *TransactCompat) Commit() (err error) {
 	defer func() {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
+			err = ErrToPostgresError(err)
 		}
 		span.End()
 	}()

@@ -78,7 +78,7 @@ func (m *Mux) registerAPIGroup(group APIGroup) {
 
 func (m *Mux) handlerFunc(endpoint APIEndpointer) {
 	ae := endpoint.Endpoint()
-	checkEndpoint(ae.Method, ae)
+	checkEndpoint(ae)
 
 	handler := func(w http.ResponseWriter, r *http.Request) error {
 		return endpoint.Handler()(w, r)
@@ -101,7 +101,7 @@ func (m *Mux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // checkEndpoint checks whether the endpoint is correct as we want it.
-func checkEndpoint(method string, ae APIEndpoint) {
+func checkEndpoint(ae APIEndpoint) {
 	if reflect.ValueOf(ae).IsZero() {
 		panic("api endpoint cannot be nil")
 	}

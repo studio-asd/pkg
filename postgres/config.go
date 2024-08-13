@@ -23,11 +23,15 @@ const (
 
 // ConnectConfig stores the configuration to create a new connection to PostgreSQL database.
 type ConnectConfig struct {
-	isCopy          bool
-	Driver          string
-	Username        string
-	Password        string
-	Host            string
+	// Driver is the Go driver that will be used to connect to PostgreSQL database. For example, libpq/pgx.
+	Driver string
+	// Username is the username to connect to the PostgreSQL database.
+	Username string
+	// Password is the password to connect to the PostgreSQL database.
+	Password string
+	// Host is the host address to connect to the PostgreSQL database. For example, localhost.
+	Host string
+	// Port is the port to connecto to the PostgreSQL database. For example, 5432.
 	Port            string
 	DBName          string
 	SearchPath      string
@@ -35,9 +39,8 @@ type ConnectConfig struct {
 	MaxOpenConns    int
 	ConnMaxIdletime time.Duration
 	ConnMaxLifetime time.Duration
-	// TracerConfig holds the tracer configuration along with otel tracer inside it. We use pointer for the tracer config because
-	// the configuration will be used in several hot-path and we don't want the values to are copied all over again.
-	TracerConfig *TracerConfig
+	// TracerConfig holds the tracer configuration along with otel tracer inside it.
+	TracerConfig TracerConfig
 }
 
 func (c *ConnectConfig) validate() error {
@@ -72,7 +75,6 @@ func (c *ConnectConfig) validate() error {
 	if c.SSLMode == "" {
 		c.SSLMode = "disable"
 	}
-
 	// Overrides values.
 	if c.MaxOpenConns == 0 {
 		c.MaxOpenConns = defaultMaxOpenConns
@@ -83,14 +85,8 @@ func (c *ConnectConfig) validate() error {
 	if c.ConnMaxLifetime == 0 {
 		c.ConnMaxLifetime = defaultConnMaxLifetime
 	}
-	if c.TracerConfig == nil {
-		c.TracerConfig = &TracerConfig{}
-	}
 	if err := c.TracerConfig.validate(); err != nil {
 		return err
-	}
-	if c.isCopy {
-		return nil
 	}
 	// Inject the information to the tracer configuration as we want to inject these information
 	// when create spans.
@@ -151,16 +147,7 @@ func (t *TracerConfig) traceAttributes(query string, args ...any) []attribute.Ke
 
 // traceAttributesFromcontext returns the trace attributes from context, query and the query arguments.
 func (t *TracerConfig) traceAttributesFromContext(ctx context.Context, query string, args ...any) []attribute.KeyValue {
-	var attrs []attribute.KeyValue
-	b := instrumentation.BaggageFromContext(ctx)
-	if !b.Empty() {
-		attrs = append(attrs, attribute.String("request.id", b.RequestID))
-		attrs = append(attrs, attribute.String("api.name", b.APIName))
-		attrs = append(attrs, attribute.String("api.owner", b.APIOwner))
-		if b.DebugID != "" {
-			attrs = append(attrs, attribute.String("debug_id", b.DebugID))
-		}
-	}
+	attrs := instrumentation.BaggageFromContext(ctx).ToOpenTelemetryAttributes()
 	ta := t.traceAttributes(query, args...)
 	if len(ta) > 0 {
 		attrs = append(attrs, ta...)

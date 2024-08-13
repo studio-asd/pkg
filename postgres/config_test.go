@@ -1,6 +1,11 @@
 package postgres
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+
+	"go.opentelemetry.io/otel/trace/noop"
+)
 
 func TestConfigvalidate(t *testing.T) {
 	t.Parallel()
@@ -55,6 +60,12 @@ func TestConfigvalidate(t *testing.T) {
 		}
 		if c.ConnMaxIdletime != defaultConnMaxIdletime {
 			t.Fatalf("expecting max idle time %d but got %d", defaultConnMaxIdletime, c.ConnMaxIdletime)
+		}
+
+		tracerName := reflect.TypeOf(c.TracerConfig.Tracer).String()
+		expectTracerName := reflect.TypeOf((noop.Tracer)(noop.Tracer{})).String()
+		if tracerName != expectTracerName {
+			t.Fatalf("expecting tracer %s but got %s", expectTracerName, tracerName)
 		}
 	})
 }

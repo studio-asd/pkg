@@ -17,6 +17,9 @@ import (
 )
 
 func TestBulkInsert(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
 	t.Parallel()
 
 	table := "test_bulk_insert"
@@ -155,6 +158,9 @@ func TestBulkInsert(t *testing.T) {
 }
 
 func TestBulkUpdate(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)

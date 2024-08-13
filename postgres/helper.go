@@ -77,7 +77,7 @@ func (p *Postgres) bulkInsert(ctx context.Context, table string, columns, return
 		return fmt.Errorf("too many columns to insert: %d", len(columns))
 	}
 
-	spanCtx, span := p.tracer.Start(
+	spanCtx, span := p.tracer.Tracer.Start(
 		ctx,
 		"postgres.bulkInsert",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -226,7 +226,7 @@ func (p *Postgres) BulkUpdate(ctx context.Context, table string, columns, types 
 
 	query := buildBulkUpdateQuery(table, columns, types)
 
-	spanCtx, span := p.tracer.Start(
+	spanCtx, span := p.tracer.Tracer.Start(
 		ctx,
 		"postgres.bulkUpdate",
 		trace.WithSpanKind(trace.SpanKindInternal),

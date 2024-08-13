@@ -2,6 +2,7 @@ package pgtest
 
 import (
 	"context"
+	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
@@ -42,7 +43,19 @@ func checkTesting() {
 //
 // WARNING: Please use this function carefully as by default, this will automatically drops the database if the database is exists.
 // Please don't use this function out fo the test code. To not drop the database, PGTEST_SKIP_DROP environment variable need to be set.
-func CreateDatabase(ctx context.Context, pg *postgres.Postgres, name string) error {
+func CreateDatabase(ctx context.Context, pg *postgres.Postgres, name string, recreateIfExists bool) error {
+	// recreateIfExists forcefully create the database if the database is already exists, otherwise it will just ignore the
+	// fact that the database is exists and continue.
+	if !recreateIfExists {
+		ok, err := isDatabaseExists(ctx, pg, name)
+		if err != nil {
+			return err
+		}
+		if ok {
+			return nil
+		}
+	}
+
 	query := fmt.Sprintf("CREATE DATABASE %s", name)
 	_, err := pg.Exec(ctx, query)
 	if err != nil && err != context.Canceled {
@@ -51,7 +64,7 @@ func CreateDatabase(ctx context.Context, pg *postgres.Postgres, name string) err
 			return nil
 		}
 		// If we got an error it might be because the database is still exist.
-		errDrop := dropDatabase(ctx, pg, name)
+		errDrop := DropDatabase(ctx, pg, name)
 		if errDrop != nil {
 			return errors.Join(err, errDrop)
 		}
@@ -82,13 +95,26 @@ func CreateDatabase(ctx context.Context, pg *postgres.Postgres, name string) err
 	return nil
 }
 
-func dropDatabase(ctx context.Context, pg *postgres.Postgres, name string) error {
-	query := fmt.Sprintf("DROP DATABASE %s", name)
+func DropDatabase(ctx context.Context, pg *postgres.Postgres, name string) error {
+	query := fmt.Sprintf("DROP DATABASE IF EXISTS %s", name)
 	_, err := pg.Exec(ctx, query)
 	if err != nil {
 		err = fmt.Errorf("failed to drop database: %w", err)
 	}
 	return err
+}
+
+func isDatabaseExists(ctx context.Context, pg *postgres.Postgres, name string) (bool, error) {
+	var gotName string
+	query := fmt.Sprintf("SELECT datname FROM pg_database WHERE datname='%s'", name)
+	row := pg.QueryRow(ctx, query)
+	if err := row.Scan(&gotName); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return gotName == name, nil
 }
 
 type PGTest struct {

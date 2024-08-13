@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -21,6 +22,12 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	flag.Parse()
+	if testing.Short() {
+		code := m.Run()
+		os.Exit(code)
+	}
+
 	for _, driver := range []string{"postgres", "pgx"} {
 		fmt.Println("==========")
 		fmt.Printf("Driver: %s\n", driver)
@@ -58,6 +65,7 @@ func TestMain(m *testing.M) {
 
 func TestGenerateURL(t *testing.T) {
 	t.Parallel()
+
 	tests := []struct {
 		name   string
 		config ConnectConfig
@@ -107,7 +115,11 @@ func TestGenerateURL(t *testing.T) {
 }
 
 func TestConnect(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
 	t.Parallel()
+
 	tests := []struct {
 		name   string
 		config ConnectConfig

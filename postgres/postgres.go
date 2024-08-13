@@ -17,10 +17,8 @@ import (
 	"sync"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
-	"github.com/lib/pq"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -28,12 +26,18 @@ import (
 
 type Postgres struct {
 	config ConnectConfig
+	// tracer stores the pointer to the tracer configuration as we pass the tracer configuration everywhere.
+	// We don't use pointer of the TracerConfig inside the ConnectConfig because the configuration can be copied
+	// outside of the postgres package.
+	//
+	// As this configuration will be passed to transactions, etc. Please be awware to not change the values as
+	// it will introduce a race.
+	tracer *TracerConfig
 
 	db  *sql.DB
 	pgx *pgxpool.Pool
 	tx  Transaction
 
-	tracer trace.Tracer
 	// searchPathMu protects set of the searchpath.
 	searchPathMu sync.RWMutex
 	searchPath   string // default schema separated by comma.
@@ -50,9 +54,7 @@ func (p *Postgres) InTransaction() bool {
 
 // Config returns the copy of connection configuration.
 func (p *Postgres) Config() ConnectConfig {
-	copyConfig := p.config
-	copyConfig.isCopy = true
-	return copyConfig
+	return p.config
 }
 
 // Connect returns connected Postgres object.
@@ -97,9 +99,9 @@ func Connect(ctx context.Context, config ConnectConfig) (*Postgres, error) {
 
 	p := &Postgres{
 		config:     config,
+		tracer:     &config.TracerConfig,
 		db:         db,
 		pgx:        pgxdb,
-		tracer:     config.TracerConfig.Tracer,
 		searchPath: config.SearchPath,
 	}
 	return p, nil
@@ -110,7 +112,7 @@ func (p *Postgres) Query(ctx context.Context, query string, params ...any) (*Row
 }
 
 func (p *Postgres) query(ctx context.Context, query string, params ...any) (rc *RowsCompat, err error) {
-	spanCtx, span := p.tracer.Start(
+	spanCtx, span := p.tracer.Tracer.Start(
 		ctx,
 		"postgres.query",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -118,6 +120,7 @@ func (p *Postgres) query(ctx context.Context, query string, params ...any) (rc *
 	defer func() {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
+			err = ErrToPostgresError(err)
 		}
 		span.End()
 	}()
@@ -155,14 +158,14 @@ func (p *Postgres) RunQuery(ctx context.Context, query string, f func(*RowsCompa
 	defer rows.Close()
 	for rows.Next() {
 		if err := f(rows); err != nil {
-			return err
+			return ErrToPostgresError(err)
 		}
 	}
-	return rows.Err()
+	return ErrToPostgresError(rows.Err())
 }
 
 func (p *Postgres) QueryRow(ctx context.Context, query string, params ...any) *RowCompat {
-	spanCtx, span := p.tracer.Start(
+	spanCtx, span := p.tracer.Tracer.Start(
 		ctx,
 		"postgres.queryRow",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -184,7 +187,7 @@ func (p *Postgres) QueryRow(ctx context.Context, query string, params ...any) *R
 }
 
 func (p *Postgres) Exec(ctx context.Context, query string, params ...any) (ec *ExecResultCompat, err error) {
-	spanCtx, span := p.tracer.Start(
+	spanCtx, span := p.tracer.Tracer.Start(
 		ctx,
 		"postgres.exec",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -234,7 +237,7 @@ type Transaction interface {
 
 func (p *Postgres) Transact(ctx context.Context, iso sql.IsolationLevel, txFunc func(context.Context, *Postgres) error) error {
 	err := p.transact(ctx, iso, txFunc)
-	return err
+	return ErrToPostgresError(err)
 }
 
 func (p *Postgres) beginTx(ctx context.Context, iso sql.IsolationLevel) (tx *TransactCompat, err error) {
@@ -245,7 +248,7 @@ func (p *Postgres) beginTx(ctx context.Context, iso sql.IsolationLevel) (tx *Tra
 		attribute.Bool("postgres.in_transaction", true),
 	)
 
-	spanCtx, span := p.tracer.Start(
+	spanCtx, span := p.tracer.Tracer.Start(
 		ctx,
 		"postgres.beginTx",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -268,7 +271,7 @@ func (p *Postgres) beginTx(ctx context.Context, iso sql.IsolationLevel) (tx *Tra
 		tx = &TransactCompat{
 			pgxTx:  pgxTx,
 			ctx:    spanCtx,
-			tracer: p.config.TracerConfig,
+			tracer: p.tracer,
 			// Load span attributes once, without the query name and also the arguments. So we don't have to load
 			// all the attributes again in each operation.
 			spanAttrs: spanAttrs,
@@ -283,7 +286,7 @@ func (p *Postgres) beginTx(ctx context.Context, iso sql.IsolationLevel) (tx *Tra
 	tx = &TransactCompat{
 		tx:     stdlibTx,
 		ctx:    spanCtx,
-		tracer: p.config.TracerConfig,
+		tracer: p.tracer,
 		// Load span attributes once, without the query name and also the arguments. So we don't have to load
 		// all the attributes again in each operation.
 		spanAttrs: spanAttrs,
@@ -296,7 +299,7 @@ func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc 
 		return errors.New("a DB Transact function was called on a DB already in a transaction")
 	}
 
-	spanCtx, span := p.tracer.Start(
+	spanCtx, span := p.tracer.Tracer.Start(
 		ctx,
 		"postgres.transact",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -353,7 +356,7 @@ func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc 
 }
 
 func (p *Postgres) Prepare(ctx context.Context, query string) (sc *StmtCompat, err error) {
-	spanCtx, span := p.tracer.Start(
+	spanCtx, span := p.tracer.Tracer.Start(
 		ctx,
 		"postgres.prepare",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -361,6 +364,7 @@ func (p *Postgres) Prepare(ctx context.Context, query string) (sc *StmtCompat, e
 	defer func() {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
+			err = ErrToPostgresError(err)
 		}
 		span.End()
 	}()
@@ -372,17 +376,18 @@ func (p *Postgres) Prepare(ctx context.Context, query string) (sc *StmtCompat, e
 
 	span.SetAttributes(p.config.TracerConfig.traceAttributesFromContext(ctx, query)...)
 	if p.pgx != nil {
-		return &StmtCompat{sql: query, pgxdb: p.pgx, ctx: spanCtx, tracer: p.config.TracerConfig}, nil
+		return &StmtCompat{sql: query, pgxdb: p.pgx, ctx: spanCtx, tracer: p.tracer}, nil
 	}
-	stmt, err := p.db.PrepareContext(spanCtx, query)
+	var stmt *sql.Stmt
+	stmt, err = p.db.PrepareContext(spanCtx, query)
 	if err != nil {
 		return nil, err
 	}
-	return &StmtCompat{stmt: stmt, ctx: spanCtx, tracer: p.config.TracerConfig}, nil
+	return &StmtCompat{stmt: stmt, ctx: spanCtx, tracer: p.tracer}, nil
 }
 
 func (p *Postgres) Ping(ctx context.Context) (err error) {
-	spanCtx, span := p.tracer.Start(
+	spanCtx, span := p.tracer.Tracer.Start(
 		ctx,
 		"postgres.ping",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -391,6 +396,7 @@ func (p *Postgres) Ping(ctx context.Context) (err error) {
 	defer func() {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
+			err = ErrToPostgresError(err)
 		}
 		span.End()
 	}()
@@ -459,17 +465,4 @@ func (p *Postgres) StdlibDB() *sql.DB {
 	// The pgx version will create a whole new connection instead of using the current one.
 	copyConf := p.pgx.Config().Copy()
 	return stdlib.OpenDB(*copyConf.ConnConfig)
-}
-
-// IsPQError returns whether the error is a PostgreSQL internal error or not.
-func IsPQError(err error) (string, bool) {
-	var pgerr *pgconn.PgError
-	if errors.As(err, &pgerr) {
-		return pgerr.Code, true
-	}
-	var pqerr *pq.Error
-	if errors.As(err, &pqerr) {
-		return string(pqerr.Code), true
-	}
-	return "", false
 }

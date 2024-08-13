@@ -3,6 +3,8 @@ package instrumentation
 import (
 	"context"
 	"log/slog"
+
+	"go.opentelemetry.io/otel/attribute"
 )
 
 const (
@@ -81,6 +83,22 @@ func (b Baggage) ToTextMapCarrier() map[string]string {
 	carrier[debugIDInst] = b.DebugID
 	carrier[preferredLanguageInst] = b.PreferredLanguage
 	return carrier
+}
+
+// ToOpenTelemetryAttributes returns open telemetry attributes based on the baggage.
+func (b Baggage) ToOpenTelemetryAttributes() []attribute.KeyValue {
+	if !b.valid || b.Empty() {
+		return []attribute.KeyValue{}
+	}
+	attrs := []attribute.KeyValue{
+		attribute.String("api.request_id", b.RequestID),
+		attribute.String("api.name", b.APIName),
+		attribute.String("api.owner", b.APIOwner),
+	}
+	if b.DebugID != "" {
+		attrs = append(attrs, attribute.String("api.debug_id", b.DebugID))
+	}
+	return attrs
 }
 
 func (b Baggage) Empty() bool {

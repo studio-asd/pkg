@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 )
@@ -55,11 +54,6 @@ type APIEndpoint struct {
 	Response          Response // Response is the response struct for the endpoint.
 	Permission        string   // Permission is the permission required to hit the endpoint.
 	BlockRelease      bool     // BlockRelease is a flag to mark that we should not serve this specific API. This API will be mark as 'unreleased'.
-	// OnSuccessHook triggers the function when the endpoint successfully return HTTP code 200. This hook is special because we usually don't
-	// want to use hook and use a standard middleware. But because of the characteristic of the API package, using a middleware is a a bit cumbersome.
-	//
-	// For example, this hook can be used to sent a billing event in case the endpoint invocation is a success.
-	OnSuccessHook func(ctx context.Context) error
 }
 
 func (a *APIEndpoint) Validate() error {

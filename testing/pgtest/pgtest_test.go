@@ -38,7 +38,7 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if err := CreateDatabase(context.Background(), conn, dbName); err != nil {
+	if err := CreateDatabase(context.Background(), conn, dbName, true); err != nil {
 		log.Fatal(err)
 	}
 	if err := conn.Close(); err != nil {
