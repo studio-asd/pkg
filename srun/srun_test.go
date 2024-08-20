@@ -5,6 +5,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -203,25 +207,27 @@ func TestGracefulShutdown(t *testing.T) {
 // TestServiceStateLog tests the order of the service state by looking at the log output.
 // In this test we also ensure we are starting and stopping the services in the correct order.
 func TestServiceStateLog(t *testing.T) {
-	expect := `level=INFO msg="Running program: testing"
-level=INFO msg="[Service] testing_1: INITIATING..."
-level=INFO msg="[Service] testing_1: INITIATED"
-level=INFO msg="[Service] testing_1: STARTING..."
-level=INFO msg="[Service] testing_1: RUNNING"
-level=INFO msg="[Service] testing_2: INITIATING..."
-level=INFO msg="[Service] testing_2: INITIATED"
-level=INFO msg="[Service] testing_2: STARTING..."
-level=INFO msg="[Service] testing_2: RUNNING"
-level=INFO msg="[Service] testing_3: INITIATING..."
-level=INFO msg="[Service] testing_3: INITIATED"
-level=INFO msg="[Service] testing_3: STARTING..."
-level=INFO msg="[Service] testing_3: RUNNING"
-level=INFO msg="[Service] testing_3: SHUTTING DOWN..."
-level=INFO msg="[Service] testing_3: STOPPED"
-level=INFO msg="[Service] testing_2: SHUTTING DOWN..."
-level=INFO msg="[Service] testing_2: STOPPED"
-level=INFO msg="[Service] testing_1: SHUTTING DOWN..."
-level=INFO msg="[Service] testing_1: STOPPED"
+	t.Parallel()
+
+	expect := `level=INFO msg="Running program: testing" logger_scope=service_runner
+level=INFO msg="[Service] testing_1: INITIATING..." logger_scope=service_runner
+level=INFO msg="[Service] testing_1: INITIATED" logger_scope=service_runner
+level=INFO msg="[Service] testing_1: STARTING..." logger_scope=service_runner
+level=INFO msg="[Service] testing_1: RUNNING" logger_scope=service_runner
+level=INFO msg="[Service] testing_2: INITIATING..." logger_scope=service_runner
+level=INFO msg="[Service] testing_2: INITIATED" logger_scope=service_runner
+level=INFO msg="[Service] testing_2: STARTING..." logger_scope=service_runner
+level=INFO msg="[Service] testing_2: RUNNING" logger_scope=service_runner
+level=INFO msg="[Service] testing_3: INITIATING..." logger_scope=service_runner
+level=INFO msg="[Service] testing_3: INITIATED" logger_scope=service_runner
+level=INFO msg="[Service] testing_3: STARTING..." logger_scope=service_runner
+level=INFO msg="[Service] testing_3: RUNNING" logger_scope=service_runner
+level=INFO msg="[Service] testing_3: SHUTTING DOWN..." logger_scope=service_runner
+level=INFO msg="[Service] testing_3: STOPPED" logger_scope=service_runner
+level=INFO msg="[Service] testing_2: SHUTTING DOWN..." logger_scope=service_runner
+level=INFO msg="[Service] testing_2: STOPPED" logger_scope=service_runner
+level=INFO msg="[Service] testing_1: SHUTTING DOWN..." logger_scope=service_runner
+level=INFO msg="[Service] testing_1: STOPPED" logger_scope=service_runner
 `
 
 	buff := bytes.NewBuffer(nil)
@@ -433,6 +439,8 @@ func (s *serviceDoNothing) Stop(ctx context.Context) error {
 }
 
 func TestServiceLogScope(t *testing.T) {
+	t.Parallel()
+
 	t.Run("srun logger", func(t *testing.T) {
 		buff := bytes.NewBuffer(nil)
 		expectLog := `level=INFO msg="this is a log" logger_scope=service_runner
@@ -477,8 +485,8 @@ func TestServiceLogScope(t *testing.T) {
 		expectLog := `level=INFO msg="Running program: log_group" logger_scope=service_runner
 level=INFO msg="[Service] a_service: INITIATING..." logger_scope=service_runner
 level=INFO msg="[Service] a_service: INITIATED" logger_scope=service_runner
-level=INFO msg="[Service] a_service: RUNNING" logger_scope=service_runner
 level=INFO msg="[Service] a_service: STARTING..." logger_scope=service_runner
+level=INFO msg="[Service] a_service: RUNNING" logger_scope=service_runner
 level=INFO msg="this is a log" logger_scope=a_service
 level=INFO msg="[Service] a_service: SHUTTING DOWN..." logger_scope=service_runner
 level=INFO msg="[Service] a_service: STOPPED" logger_scope=service_runner
@@ -516,4 +524,72 @@ level=INFO msg="[Service] a_service: STOPPED" logger_scope=service_runner
 			t.Fatalf("(-want/+got)\n%s", diff)
 		}
 	})
+}
+
+func TestSrunKill(t *testing.T) {
+	t.Parallel()
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	testDataPath := filepath.Join(wd, "testdata")
+	testProgGo := filepath.Join(testDataPath, "testprog.go")
+
+	signals := []syscall.Signal{
+		syscall.SIGTERM,
+		syscall.SIGQUIT,
+		syscall.SIGINT,
+	}
+
+	testTmpDir := t.TempDir()
+	testBinary := filepath.Join(testTmpDir, "testing")
+	// testPID := filepath.Join(testTmpDir, "testing.pid")
+
+	// Build the test binary.
+	cmd := exec.Command("go", "build", "-o", testBinary, testProgGo)
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(testBinary)
+
+	// Move to tempdir for the test.
+	if err := os.Chdir(testTmpDir); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, signal := range signals {
+		sig := signal
+		t.Run(sig.String(), func(t *testing.T) {
+			runCmd := exec.Command(testBinary)
+			if err := runCmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			// Send the wait to the channel so we are not blocking the test.
+			errC := make(chan error, 1)
+			go func() {
+				err := runCmd.Wait()
+				errC <- err
+			}()
+			// Initial wait if there is an initial error when running the program.
+			tAfterC := time.After(time.Second)
+			select {
+			case err := <-errC:
+				t.Fatal(err)
+			case <-tAfterC:
+			}
+
+			if err := runCmd.Process.Signal(sig); err != nil {
+				t.Fatal(err)
+			}
+			// Wait until the program exit, program should exit with code zero(0) and nil error.
+			err := <-errC
+			if err != nil {
+				t.Fatal(err)
+			}
+			if runCmd.ProcessState.ExitCode() != 0 {
+				t.Fatalf("expecting 0 exit code but got %d", runCmd.ProcessState.ExitCode())
+			}
+		})
+	}
 }

@@ -1,2 +1,4 @@
 # Ignore the testing pid file.
 testing.pid
+.zed
+aws

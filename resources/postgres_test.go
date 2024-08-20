@@ -7,6 +7,8 @@ import (
 )
 
 func TestPostgresConfigValidate(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name   string
 		config PostgresResourcesConfig

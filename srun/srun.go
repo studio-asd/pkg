@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"runtime"
 	"runtime/debug"
 	"sync"
 	"syscall"
@@ -17,7 +16,6 @@ import (
 
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
-	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -70,6 +68,8 @@ const (
 )
 
 var (
+	// errReceivingExitSignal being thrown when the signal.Notify receives a signal of termination/interrupt.
+	errReceivingExitSginal         = errors.New("receiving exit signal")
 	errServiceRunnerAlreadyRunning = errors.New("service runner is already running")
 	errGracefulPeriodTimeout       = errors.New("graceful-period timeout")
 	// errRunDeadlineTimeout being thrown when 'SRUN_DEADLINE' is being set and the runner has run beyond the deadline duration.
@@ -213,13 +213,10 @@ type Runner struct {
 	// Services is the list of objects that can be controlled by the runner.
 	services []*ServiceStateTracker
 
+	ctx context.Context
 	// logger is the default slog.Logger with group for runner. We will use this logger
 	// to log instead of the global slog.
 	logger *slog.Logger
-	// ctxSignal is a context to wait for the exit signals.
-	ctxSignal       context.Context
-	ctxSignalCancel func()
-
 	// upgrader instance to allow the program to self-upgrade using cloudflare/tableflip.
 	upgrader *upgrader
 	// adminServer instance to allow the program to expose several important endpoints for program diagnostics.
@@ -361,14 +358,6 @@ func New(config Config) *Runner {
 		ctx = upg.Context()
 	}
 
-	// Listen to the signal to exit the program.
-	ctxSignal, cancel := signal.NotifyContext(
-		ctx,
-		syscall.SIGTERM,
-		syscall.SIGINT,
-		syscall.SIGQUIT,
-	)
-
 	meter, meterLrt, err := newOtelMetricMeterAndProviderService(config.OtelMetric)
 	if err != nil {
 		panic(err)
@@ -381,14 +370,13 @@ func New(config Config) *Runner {
 	r := &Runner{
 		serviceName: config.ServiceName,
 		config:      conf,
+		ctx:         ctx,
 		// Assign a new logger from the default logger(we have configured this before), so each logger will have default attributes
 		// called 'logger_scope' to tell the scope of the logger.
-		logger:          slog.Default().With(slog.String("logger_scope", "service_runner")),
-		ctxSignal:       ctxSignal,
-		ctxSignalCancel: cancel,
-		upgrader:        upg,
-		otelMeter:       meter,
-		otelTracer:      tracer,
+		logger:     slog.Default().With(slog.String("logger_scope", "service_runner")),
+		upgrader:   upg,
+		otelMeter:  meter,
+		otelTracer: tracer,
 	}
 	if err := r.registerDefaultServices(tracerLrt, meterLrt); err != nil {
 		panic(err)
@@ -401,12 +389,6 @@ func (r *Runner) register(services ...ServiceRunnerAware) error {
 	if len(services) == 0 {
 		return errors.New("register called with no service provided")
 	}
-
-	// Init is controlled by the init timeout and errgroup. We will init all the services concurrently.
-	initTimeoutCtx, cancel := context.WithTimeout(r.ctxSignal, r.config.Timeout.InitTimeout)
-	defer cancel()
-	group, _ := errgroup.WithContext(initTimeoutCtx)
-	group.SetLimit(runtime.NumCPU())
 
 	for _, svc := range services {
 		// Register the service to the healthcheck service so it is aware of the number of services and consumers.
@@ -434,7 +416,7 @@ func (r *Runner) register(services ...ServiceRunnerAware) error {
 		// Wrap ALL services using ServiceState tracker as we need to track the status/state of all services.
 		r.services = append(r.services, newServiceStateTracker(svc, r.logger))
 	}
-	return group.Wait()
+	return nil
 }
 
 func (r *Runner) registerDefaultServices(otelTracerProvider, otelMeterProvider *LongRunningTask) error {
@@ -482,7 +464,6 @@ func (r *Runner) registerDefaultServices(otelTracerProvider, otelMeterProvider *
 // Please NOTE that the run function should not block, otherwise  the runner can't execute other services that registered in the runner.
 func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) (err error) {
 	r.logger.Info(fmt.Sprintf("Running program: %s", r.serviceName))
-
 	var (
 		readyTimeout            = r.config.Timeout.ReadyTimeout
 		gracefulShutdownTimeout = r.config.Timeout.ShutdownGracefulPeriod
@@ -490,9 +471,6 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 
 	// Set the state of the service runner to run/not running and catch panic to enrich the error.
 	defer func() {
-		// Ensure no context is leaking and not cancelled.
-		r.ctxSignalCancel()
-
 		var stackTrace []byte
 		v := recover()
 		if v != nil {
@@ -518,19 +496,41 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 		}
 	}()
 
+	parentCtx := r.ctx
 	// If the deadline duration of the runner is not zero, then we should respect the deadline. By using deadline, it means the program
 	// will exit if the deadline is reached.
 	//
 	// The deadline is being set here to be as close as possible to the run function.
 	if r.config.DeadlineDuration > 0 {
-		r.ctxSignal, r.ctxSignalCancel = context.WithDeadlineCause(
-			r.ctxSignal,
+		var deadlineCancel context.CancelFunc
+		parentCtx, deadlineCancel = context.WithDeadlineCause(
+			parentCtx,
 			time.Now().Add(r.config.DeadlineDuration),
 			errRunDeadlineTimeout,
 		)
+		defer deadlineCancel()
 	}
+	// Create a context signal to catch interupt/termination signal for the program. And use the context as the parent context for everything.
+	ctxSignal, ctxSignalCancel := context.WithCancelCause(parentCtx)
+	defer ctxSignalCancel(nil)
+	signalC := make(chan os.Signal, 1)
+	signal.Notify(
+		signalC,
+		syscall.SIGTERM,
+		syscall.SIGINT,
+		syscall.SIGQUIT,
+	)
+	go func() {
+		select {
+		case sig := <-signalC:
+			ctxSignalCancel(fmt.Errorf("%w: %s", errReceivingExitSginal, sig.String()))
+			return
+		case <-ctxSignal.Done():
+			return
+		}
+	}()
 
-	err = run(r.ctxSignal, newRegistrar(r))
+	err = run(parentCtx, newRegistrar(r))
 	if err != nil {
 		return
 	}
@@ -583,7 +583,7 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 		cancel()
 	}()
 
-	errC := make(chan error, 1)
+	errC := make(chan error, len(r.services))
 	// Start the service with FIFO, as we want to ensure the service at the bottom of the stack will be always
 	// ready to start. For example, this behavior is beneficial when we start http/gRPC server after we are
 	// connected to all dependencies.
@@ -599,8 +599,12 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 	// and then grpc-server last.
 	for _, service := range r.services {
 		svc := service
+		if ctxSignal.Err() != nil {
+			err = ctxSignal.Err()
+			return
+		}
 		// Init the service.
-		initCtx, cancel := context.WithTimeout(r.ctxSignal, r.config.Timeout.InitTimeout)
+		initCtx, cancel := context.WithTimeout(ctxSignal, r.config.Timeout.InitTimeout)
 		go func() {
 			initContext := Context{
 				Ctx: initCtx,
@@ -629,21 +633,25 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 		}
 		// Run the service.
 		go func(s *ServiceStateTracker) {
-			err := s.Run(r.ctxSignal)
+			err := s.Run(ctxSignal)
 			errC <- err
 		}(svc)
+
 		// Check whether the service is in ready state or not. We use backoff, because sometimes the goroutines is not scheduled
 		// yet, thus lead to wrong result.
 		readyCheckBackoff := time.Millisecond * 300
 		readyC := make(chan error, 1)
 		// Create a timeout for service readiness as we don't want to wait for too long for unresponsive service.
-		readyTimeoutCtx, cancelReady := context.WithTimeout(r.ctxSignal, readyTimeout)
+		readyTimeoutCtx, cancelReady := context.WithTimeout(ctxSignal, readyTimeout)
 		defer cancelReady()
 		// Spawn a goroutine to wait for the ready notification.
 		go func() {
 			// The loop and delay here is just to ensure we are waiting for the service that just started. It will possibly
 			// throw an error because the goroutine that triggers Run is not scheduled yet.
 			for i := 0; i < 3; i++ {
+				if readyTimeoutCtx.Err() != nil {
+					readyC <- readyTimeoutCtx.Err()
+				}
 				err := svc.Ready(readyTimeoutCtx)
 				if err != nil && errors.Is(err, errCantCheckReadiness) {
 					time.Sleep(readyCheckBackoff)
@@ -656,18 +664,14 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 
 		// Wait for the service to be ready before starting the next service.
 		select {
-		// We don't have to wait until all services are started before listening to an error.
-		case errCallback := <-errC:
-			if errCallback == nil {
-				continue
-			}
-			err = errCallback
-			return
 		case <-readyTimeoutCtx.Done():
 			cancelReady()
-			return errServiceReadyTimeout
+			err = context.Cause(readyTimeoutCtx)
+			err = errors.Join(err, errServiceReadyTimeout)
+			return
 		case err := <-readyC:
 			if err != nil {
+				err = errors.Join(err, context.Cause(readyTimeoutCtx))
 				return err
 			}
 		}
@@ -701,17 +705,18 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 	//    So we will not wait for all services to shutdown again.
 	for {
 		select {
-		case <-r.ctxSignal.Done():
-			err = context.Cause(r.ctxSignal)
+		case <-ctxSignal.Done():
+			err = context.Cause(ctxSignal)
 			return
 
 		case err = <-errC:
 			errCounter++
 			if err != nil {
 				// If an error is not because an upgrade, add more context that the program exit because an error from a service.
-				if !errors.Is(err, errUpgrade) {
+				if isError(err) {
 					err = fmt.Errorf("%w:%v", errServiceError, err)
 				}
+				ctxSignalCancel(nil)
 				return
 			}
 			// We will ignore services that returned nil error if the number of running services is still
@@ -723,18 +728,24 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 			if errCounter < len(r.services) {
 				continue
 			}
+			ctxSignalCancel(nil)
 			return
 		}
 	}
 }
 
-// MustRun exit the program using exit 1. The function does not using panic because we don't want to print the stack trace and only the error.
+// MustRun exit the program using os.Exit when it stops. The function determine the error using the internal isError
+// function to understand whether an error is exepceted or not.
+//
+// If the client need to define its own error, using Run is recommended so it can decide what to do with the error.
 func (r *Runner) MustRun(run func(ctx context.Context, runner ServiceRunner) error) {
 	exitCode := 0
 	err := r.Run(run)
 	if err != nil {
 		slog.Error(err.Error())
-		exitCode = 1
+		if isError(err) {
+			exitCode = 1
+		}
 	}
 	// In test we can't invoke os.Exit(), to avoid error during test we will ignore the exit and just return.
 	if testing.Testing() {
@@ -749,10 +760,12 @@ func (r *Runner) MustRun(run func(ctx context.Context, runner ServiceRunner) err
 // There are only two errors that expected by runner:
 //   - ErrUpgrade, which indicates the runner need to exit to start a new process.
 //   - ErrRunDeadlineTimeout, which indicates the deadline timeout have been reached.
+//   - ErrReceiveingExitSignal, which tell the program is triggered by a signal to exit.
 func isError(err error) bool {
 	okErrors := []error{
 		errUpgrade,
 		errRunDeadlineTimeout,
+		errReceivingExitSginal,
 		nil,
 	}
 	for _, okError := range okErrors {

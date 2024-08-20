@@ -3,6 +3,7 @@ module github.com/albertwidi/pkg
 go 1.22.0
 
 require (
+	github.com/aws/aws-sdk-go-v2 v1.30.4
 	github.com/cloudflare/tableflip v1.2.3
 	github.com/google/go-cmp v0.6.0
 	github.com/gorilla/schema v1.4.1
