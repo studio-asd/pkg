@@ -117,11 +117,6 @@ func (a *adminHTTPServer) Stop(ctx context.Context) error {
 			return err
 		}
 	}
-	// We close the listener here for just in case we somehow failed in the init state and server
-	// is not running yet.
-	if err := a.listener.Close(); err != nil {
-		return err
-	}
 	return nil
 }
 

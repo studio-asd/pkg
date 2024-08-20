@@ -100,19 +100,19 @@ func TestConcurrentServices(t *testing.T) {
 		// Check whether some logs are exists. The test is not deterministic because Go will schedule the goroutines based
 		// on the availbility of the resource and runtime processes.
 		checkExists := []string{
-			`level=INFO msg="[Service] testing_1: INITIATING..."`,
+			`level=INFO msg="[Service] testing_1: INITIATING"`,
 			`level=INFO msg="[Service] testing_1: INITIATED"`,
-			`level=INFO msg="[Service] testing_1: STARTING..."`,
+			`level=INFO msg="[Service] testing_1: STARTING"`,
 			`level=INFO msg="[Service] testing_1: RUNNING"`,
-			`level=INFO msg="[Service] testing_1: SHUTTING DOWN..."`,
+			`level=INFO msg="[Service] testing_1: SHUTTING DOWN"`,
 			`level=INFO msg="[Service] testing_1: STOPPED"`,
-			`level=INFO msg="[Service] testing_2: STARTING..."`,
+			`level=INFO msg="[Service] testing_2: STARTING"`,
 			`level=INFO msg="[Service] testing_2: RUNNING"`,
-			`level=INFO msg="[Service] testing_2: SHUTTING DOWN..."`,
+			`level=INFO msg="[Service] testing_2: SHUTTING DOWN"`,
 			`level=INFO msg="[Service] testing_2: STOPPED"`,
-			`level=INFO msg="[Service] testing_3: STARTING..."`,
+			`level=INFO msg="[Service] testing_3: STARTING"`,
 			`level=INFO msg="[Service] testing_3: RUNNING"`,
-			`level=INFO msg="[Service] testing_3: SHUTTING DOWN..."`,
+			`level=INFO msg="[Service] testing_3: SHUTTING DOWN"`,
 			`level=INFO msg="[Service] testing_3: STOPPED"`,
 		}
 		logOutput := buff.String()
@@ -172,19 +172,19 @@ func TestConcurrentServices(t *testing.T) {
 		// Check whether some logs are exists. The test is not deterministic because Go will schedule the goroutines based
 		// on the availbility of the resource and runtime processes.
 		checkExists := []string{
-			`level=INFO msg="[Service] testing_1: INITIATING..."`,
+			`level=INFO msg="[Service] testing_1: INITIATING"`,
 			`level=INFO msg="[Service] testing_1: INITIATED"`,
-			`level=INFO msg="[Service] testing_1: STARTING..."`,
+			`level=INFO msg="[Service] testing_1: STARTING"`,
 			`level=INFO msg="[Service] testing_1: RUNNING"`,
-			`level=INFO msg="[Service] testing_1: SHUTTING DOWN..."`,
+			`level=INFO msg="[Service] testing_1: SHUTTING DOWN"`,
 			`level=INFO msg="[Service] testing_1: STOPPED"`,
-			`level=INFO msg="[Service] testing_2: STARTING..."`,
+			`level=INFO msg="[Service] testing_2: STARTING"`,
 			`level=INFO msg="[Service] testing_2: RUNNING"`,
-			`level=INFO msg="[Service] testing_2: SHUTTING DOWN..."`,
+			`level=INFO msg="[Service] testing_2: SHUTTING DOWN"`,
 			`level=INFO msg="[Service] testing_2: STOPPED"`,
-			`level=INFO msg="[Service] testing_3: STARTING..."`,
+			`level=INFO msg="[Service] testing_3: STARTING"`,
 			`level=INFO msg="[Service] testing_3: RUNNING"`,
-			`level=INFO msg="[Service] testing_3: SHUTTING DOWN..."`,
+			`level=INFO msg="[Service] testing_3: SHUTTING DOWN"`,
 			`level=INFO msg="[Service] testing_3: STOPPED"`,
 		}
 		logOutput := buff.String()
@@ -243,19 +243,19 @@ func TestConcurrentServices(t *testing.T) {
 		// Check whether some logs are exists. The test is not deterministic because Go will schedule the goroutines based
 		// on the availbility of the resource and runtime processes.
 		checkExists := []string{
-			`level=INFO msg="[Service] testing_1: INITIATING..."`,
+			`level=INFO msg="[Service] testing_1: INITIATING"`,
 			`level=INFO msg="[Service] testing_1: INITIATED"`,
-			`level=INFO msg="[Service] testing_1: STARTING..."`,
+			`level=INFO msg="[Service] testing_1: STARTING"`,
 			`level=INFO msg="[Service] testing_1: RUNNING"`,
-			`level=INFO msg="[Service] testing_1: SHUTTING DOWN..."`,
+			`level=INFO msg="[Service] testing_1: SHUTTING DOWN"`,
 			`level=INFO msg="[Service] testing_1: STOPPED"`,
-			`level=INFO msg="[Service] testing_2: STARTING..."`,
+			`level=INFO msg="[Service] testing_2: STARTING"`,
 			`level=INFO msg="[Service] testing_2: RUNNING"`,
-			`level=INFO msg="[Service] testing_2: SHUTTING DOWN..."`,
+			`level=INFO msg="[Service] testing_2: SHUTTING DOWN"`,
 			`level=INFO msg="[Service] testing_2: STOPPED"`,
-			`level=INFO msg="[Service] testing_3: STARTING..."`,
+			`level=INFO msg="[Service] testing_3: STARTING"`,
 			`level=INFO msg="[Service] testing_3: RUNNING"`,
-			`level=INFO msg="[Service] testing_3: SHUTTING DOWN..."`,
+			`level=INFO msg="[Service] testing_3: SHUTTING DOWN"`,
 			`level=INFO msg="[Service] testing_3: STOPPED"`,
 		}
 		logOutput := buff.String()
@@ -411,13 +411,13 @@ func TestLongRunningTask(t *testing.T) {
 				defer cancel()
 
 				err := lrt.Stop(ctx)
-				if err != tt.stopErr {
+				if !errors.Is(err, tt.stopErr) {
 					t.Fatalf("expecting stop error %v but got %v", tt.stopErr, err)
 				}
 			}
 
 			err = <-errC
-			if err != test.runErr {
+			if !errors.Is(err, test.runErr) {
 				t.Fatalf("expecting run error %v but got %v", tt.runErr, err)
 			}
 		})

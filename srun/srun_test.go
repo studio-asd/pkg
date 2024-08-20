@@ -207,26 +207,24 @@ func TestGracefulShutdown(t *testing.T) {
 // TestServiceStateLog tests the order of the service state by looking at the log output.
 // In this test we also ensure we are starting and stopping the services in the correct order.
 func TestServiceStateLog(t *testing.T) {
-	t.Parallel()
-
 	expect := `level=INFO msg="Running program: testing" logger_scope=service_runner
-level=INFO msg="[Service] testing_1: INITIATING..." logger_scope=service_runner
+level=INFO msg="[Service] testing_1: INITIATING" logger_scope=service_runner
 level=INFO msg="[Service] testing_1: INITIATED" logger_scope=service_runner
-level=INFO msg="[Service] testing_1: STARTING..." logger_scope=service_runner
+level=INFO msg="[Service] testing_1: STARTING" logger_scope=service_runner
 level=INFO msg="[Service] testing_1: RUNNING" logger_scope=service_runner
-level=INFO msg="[Service] testing_2: INITIATING..." logger_scope=service_runner
+level=INFO msg="[Service] testing_2: INITIATING" logger_scope=service_runner
 level=INFO msg="[Service] testing_2: INITIATED" logger_scope=service_runner
-level=INFO msg="[Service] testing_2: STARTING..." logger_scope=service_runner
+level=INFO msg="[Service] testing_2: STARTING" logger_scope=service_runner
 level=INFO msg="[Service] testing_2: RUNNING" logger_scope=service_runner
-level=INFO msg="[Service] testing_3: INITIATING..." logger_scope=service_runner
+level=INFO msg="[Service] testing_3: INITIATING" logger_scope=service_runner
 level=INFO msg="[Service] testing_3: INITIATED" logger_scope=service_runner
-level=INFO msg="[Service] testing_3: STARTING..." logger_scope=service_runner
+level=INFO msg="[Service] testing_3: STARTING" logger_scope=service_runner
 level=INFO msg="[Service] testing_3: RUNNING" logger_scope=service_runner
-level=INFO msg="[Service] testing_3: SHUTTING DOWN..." logger_scope=service_runner
+level=INFO msg="[Service] testing_3: SHUTTING DOWN" logger_scope=service_runner
 level=INFO msg="[Service] testing_3: STOPPED" logger_scope=service_runner
-level=INFO msg="[Service] testing_2: SHUTTING DOWN..." logger_scope=service_runner
+level=INFO msg="[Service] testing_2: SHUTTING DOWN" logger_scope=service_runner
 level=INFO msg="[Service] testing_2: STOPPED" logger_scope=service_runner
-level=INFO msg="[Service] testing_1: SHUTTING DOWN..." logger_scope=service_runner
+level=INFO msg="[Service] testing_1: SHUTTING DOWN" logger_scope=service_runner
 level=INFO msg="[Service] testing_1: STOPPED" logger_scope=service_runner
 `
 
@@ -439,8 +437,6 @@ func (s *serviceDoNothing) Stop(ctx context.Context) error {
 }
 
 func TestServiceLogScope(t *testing.T) {
-	t.Parallel()
-
 	t.Run("srun logger", func(t *testing.T) {
 		buff := bytes.NewBuffer(nil)
 		expectLog := `level=INFO msg="this is a log" logger_scope=service_runner
@@ -483,12 +479,12 @@ func TestServiceLogScope(t *testing.T) {
 	t.Run("service logger", func(t *testing.T) {
 		buff := bytes.NewBuffer(nil)
 		expectLog := `level=INFO msg="Running program: log_group" logger_scope=service_runner
-level=INFO msg="[Service] a_service: INITIATING..." logger_scope=service_runner
+level=INFO msg="[Service] a_service: INITIATING" logger_scope=service_runner
 level=INFO msg="[Service] a_service: INITIATED" logger_scope=service_runner
-level=INFO msg="[Service] a_service: STARTING..." logger_scope=service_runner
-level=INFO msg="[Service] a_service: RUNNING" logger_scope=service_runner
+level=INFO msg="[Service] a_service: STARTING" logger_scope=service_runner
 level=INFO msg="this is a log" logger_scope=a_service
-level=INFO msg="[Service] a_service: SHUTTING DOWN..." logger_scope=service_runner
+level=INFO msg="[Service] a_service: RUNNING" logger_scope=service_runner
+level=INFO msg="[Service] a_service: SHUTTING DOWN" logger_scope=service_runner
 level=INFO msg="[Service] a_service: STOPPED" logger_scope=service_runner
 `
 
@@ -521,6 +517,8 @@ level=INFO msg="[Service] a_service: STOPPED" logger_scope=service_runner
 
 		got := buff.String()
 		if diff := cmp.Diff(expectLog, got); diff != "" {
+			t.Logf("expect:\n%s\n", expectLog)
+			t.Logf("got:\n%s\n", got)
 			t.Fatalf("(-want/+got)\n%s", diff)
 		}
 	})

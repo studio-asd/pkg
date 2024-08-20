@@ -829,13 +829,11 @@ func (s *ServiceStateTracker) State() serviceState {
 
 func (s *ServiceStateTracker) Init(ctx Context) error {
 	s.setState(serviceStateInitiating)
-	s.logger.Info(fmt.Sprintf("[Service] %s: %s...", s.Name(), s.State()))
 	err := s.ServiceRunnerAware.Init(ctx)
 	if err != nil {
 		return err
 	}
 	s.setState(serviceStateInitiated)
-	s.logger.Info(fmt.Sprintf("[Service] %s: %s", s.Name(), s.State()))
 	return err
 }
 
@@ -847,21 +845,6 @@ func (s *ServiceStateTracker) Run(ctx context.Context) error {
 		return fmt.Errorf("[run] %w: expecting %s state but got %s", errInvalidStateOrder, serviceStateInitiated, s.getState())
 	}
 	s.setState(serviceStateStarting)
-
-	// Check whether the service is implementing run info, if yes then we should add the information to log attributes.
-	var attrs []slog.Attr
-	rifo, ok := s.ServiceRunnerAware.(RunInfo)
-	if ok {
-		for k, v := range rifo.RunInfo() {
-			attrs = append(attrs, slog.String(k, v))
-		}
-	}
-	s.logger.LogAttrs(
-		ctx,
-		slog.LevelInfo,
-		fmt.Sprintf("[Service] %s: %s...", s.Name(), s.State()),
-		attrs...,
-	)
 
 	err := s.ServiceRunnerAware.Run(ctx)
 	return err
@@ -893,7 +876,6 @@ func (s *ServiceStateTracker) Ready(ctx context.Context) error {
 	if s.getState() != serviceStateRunning {
 		s.setState(serviceStateRunning)
 	}
-	s.logger.Info(fmt.Sprintf("[Service] %s: %s", s.Name(), s.State()))
 	return nil
 }
 
@@ -911,17 +893,17 @@ func (s *ServiceStateTracker) Stop(ctx context.Context) error {
 	}
 
 	s.setState(serviceStateShutdown)
-	s.logger.Info(fmt.Sprintf("[Service] %s: %s...", s.Name(), s.State()))
 	err := s.ServiceRunnerAware.Stop(ctx)
 	s.setState(serviceStateStopped)
-	s.logger.Info(fmt.Sprintf("[Service] %s: %s", s.Name(), s.State()))
 	return err
 }
 
 func (s *ServiceStateTracker) setState(state serviceState) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.state = state
+	s.logger.Info(fmt.Sprintf("[Service] %s: %s", s.Name(), s.state))
 }
 
 func (s *ServiceStateTracker) getState() serviceState {

@@ -83,6 +83,11 @@ func TestAdminEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if admin != nil {
+			admin.Stop(context.Background())
+		}
+	})
 	if err := admin.Init(Context{}); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +107,6 @@ func TestAdminEndpoints(t *testing.T) {
 		ticker.Stop()
 		break
 	}
-	defer admin.Stop(context.Background())
 
 	client := http.Client{}
 	defer client.CloseIdleConnections()

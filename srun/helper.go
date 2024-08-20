@@ -266,6 +266,10 @@ func (l *LongRunningTask) Run(ctx context.Context) error {
 			return err
 		}
 	case err := <-errC:
+		// If somehow the context is cancelled here, we should append the log with stop deadline.
+		if l.stopCtx != nil && l.stopCtx.Err() != nil {
+			err = errors.Join(err, errLongRunningTaskStopDeadline)
+		}
 		l.errMu.Lock()
 		l.err = err
 		l.errMu.Unlock()
