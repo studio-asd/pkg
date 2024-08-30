@@ -639,27 +639,15 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 
 		// Check whether the service is in ready state or not. We use backoff, because sometimes the goroutines is not scheduled
 		// yet, thus lead to wrong result.
-		readyCheckBackoff := time.Millisecond * 300
 		readyC := make(chan error, 1)
 		// Create a timeout for service readiness as we don't want to wait for too long for unresponsive service.
 		readyTimeoutCtx, cancelReady := context.WithTimeout(ctxSignal, readyTimeout)
 		defer cancelReady()
 		// Spawn a goroutine to wait for the ready notification.
 		go func() {
-			// The loop and delay here is just to ensure we are waiting for the service that just started. It will possibly
-			// throw an error because the goroutine that triggers Run is not scheduled yet.
-			for i := 0; i < 3; i++ {
-				if readyTimeoutCtx.Err() != nil {
-					readyC <- readyTimeoutCtx.Err()
-				}
-				err := svc.Ready(readyTimeoutCtx)
-				if err != nil && errors.Is(err, errCantCheckReadiness) {
-					time.Sleep(readyCheckBackoff)
-					continue
-				}
-				readyC <- err
-				return
-			}
+			err := svc.Ready(readyTimeoutCtx)
+			readyC <- err
+			return
 		}()
 
 		// Wait for the service to be ready before starting the next service.
@@ -779,10 +767,11 @@ func isError(err error) bool {
 // ServiceStateTracker wraps the actual service type/interface to track the state of the service.
 type ServiceStateTracker struct {
 	ServiceRunnerAware
-	stopMu sync.Mutex
-	mu     sync.RWMutex
-	state  serviceState
-	logger *slog.Logger
+	readyMu sync.Mutex
+	stopMu  sync.Mutex
+	mu      sync.RWMutex
+	state   serviceState
+	logger  *slog.Logger
 	// svcTypes stores the type of services. The types is a slice because we might want to record the
 	// servie to several categories.
 	//
@@ -851,6 +840,9 @@ func (s *ServiceStateTracker) Run(ctx context.Context) error {
 }
 
 func (s *ServiceStateTracker) Ready(ctx context.Context) error {
+	s.readyMu.Lock()
+	defer s.readyMu.Unlock()
+
 	if s.getState() >= serviceStateShutdown {
 		return errCantCheckReadiness
 	}
@@ -869,9 +861,25 @@ func (s *ServiceStateTracker) Ready(ctx context.Context) error {
 		}
 		return fmt.Errorf("[ready] %w: expecting %s state", errInvalidStateOrder, serviceStateStarting)
 	}
-	err := s.ServiceRunnerAware.Ready(ctx)
-	if err != nil {
-		return err
+
+	// Depends on the service internal state, some service might want to wait for some delay until the service is really ready.
+	// For example when spawning http server/grpc server, we might want to wait for some miliseconds to change the service
+	// state to ready using time.After. This means, the service will throw an error, but not really an error. So we might want to
+	// retry here as well.
+	//
+	// While we are waiting for some time above for the service to change it state to 'starting', the internal state of the service
+	// might haven't changed.
+	var readyErr error
+	for i := 0; i < 3; i++ {
+		readyErr = s.ServiceRunnerAware.Ready(ctx)
+		if readyErr == nil {
+			break
+		}
+		<-time.After(time.Millisecond * 300)
+	}
+	// Return error if after waiting we still got an error.
+	if readyErr != nil {
+		return readyErr
 	}
 	if s.getState() != serviceStateRunning {
 		s.setState(serviceStateRunning)

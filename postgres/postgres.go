@@ -374,16 +374,28 @@ func (p *Postgres) Prepare(ctx context.Context, query string) (sc *StmtCompat, e
 		return p.tx.Prepare(ctx, query)
 	}
 
-	span.SetAttributes(p.config.TracerConfig.traceAttributesFromContext(ctx, query)...)
+	attrs := p.config.TracerConfig.traceAttributesFromContext(ctx, query)
+	span.SetAttributes(attrs...)
 	if p.pgx != nil {
-		return &StmtCompat{sql: query, pgxdb: p.pgx, ctx: spanCtx, tracer: p.tracer}, nil
+		return &StmtCompat{
+			sql:       query,
+			pgxdb:     p.pgx,
+			ctx:       spanCtx,
+			tracer:    p.tracer,
+			spanAttrs: attrs,
+		}, nil
 	}
 	var stmt *sql.Stmt
 	stmt, err = p.db.PrepareContext(spanCtx, query)
 	if err != nil {
 		return nil, err
 	}
-	return &StmtCompat{stmt: stmt, ctx: spanCtx, tracer: p.tracer}, nil
+	return &StmtCompat{
+		stmt:      stmt,
+		ctx:       spanCtx,
+		tracer:    p.tracer,
+		spanAttrs: attrs,
+	}, nil
 }
 
 func (p *Postgres) Ping(ctx context.Context) (err error) {

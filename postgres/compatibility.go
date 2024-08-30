@@ -131,17 +131,19 @@ type StmtCompat struct {
 
 	stmt *sql.Stmt
 
-	ctx    context.Context
-	tracer *TracerConfig
+	spanAttrs []attribute.KeyValue
+	ctx       context.Context
+	tracer    *TracerConfig
 }
 
 func (s *StmtCompat) Query(ctx context.Context, args ...any) (rc *RowsCompat, err error) {
 	spanCtx, span := s.tracer.Tracer.Start(
 		ctx,
-		"postgres.query",
+		"postgres.stmt.query",
 		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(s.spanAttrs...),
 	)
-	span.SetAttributes(s.tracer.traceAttributesFromContext(ctx, "", args...)...)
+
 	defer func() {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
@@ -180,9 +182,11 @@ func (s *StmtCompat) Query(ctx context.Context, args ...any) (rc *RowsCompat, er
 func (s *StmtCompat) Exec(ctx context.Context, args ...any) (er *ExecResultCompat, err error) {
 	spanCtx, span := s.tracer.Tracer.Start(
 		ctx,
-		"postgres.exec",
+		"postgres.stmt.exec",
 		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(s.spanAttrs...),
 	)
+
 	defer func() {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
@@ -221,9 +225,11 @@ func (s *StmtCompat) Exec(ctx context.Context, args ...any) (er *ExecResultCompa
 func (s *StmtCompat) Close() (err error) {
 	_, span := s.tracer.Tracer.Start(
 		s.ctx,
-		"postgres.query",
+		"postgres.stmt.close",
 		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(s.spanAttrs...),
 	)
+
 	defer func() {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
@@ -350,6 +356,7 @@ func (t *TransactCompat) Prepare(ctx context.Context, query string) (*StmtCompat
 			pgxTx:       t.pgxTx,
 			pgxStmtDesc: stmtDesc,
 			tracer:      t.tracer,
+			spanAttrs:   t.spanAttrs,
 		}, nil
 	}
 	stmt, err := t.tx.PrepareContext(ctx, query)

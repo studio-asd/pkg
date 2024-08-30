@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -276,75 +279,152 @@ level=INFO msg="[Service] testing_1: STOPPED" logger_scope=service_runner
 
 func TestServiceStateTracker(t *testing.T) {
 	t.Parallel()
-	tracker := newServiceStateTracker(&serviceDoNothing{}, slog.Default())
+
+	type subTest struct {
+		name string
+		fn   func(context.Context, ServiceRunnerAware) error
+		err  error
+	}
 
 	tests := []struct {
-		name string
-		fn   func(context.Context) error
-		err  error
+		name     string
+		service  ServiceRunnerAware
+		subTests []subTest
 	}{
 		{
-			name: "init",
-			fn:   func(ctx context.Context) error { return tracker.Init(Context{}) },
-			err:  nil,
+			name:    "check state run-stop-run",
+			service: &serviceDoNothing{},
+			subTests: []subTest{
+				{
+					name: "init",
+					fn:   func(ctx context.Context, svc ServiceRunnerAware) error { return svc.Init(Context{}) },
+					err:  nil,
+				},
+				{
+					name: "try to run",
+					fn:   func(ctx context.Context, svc ServiceRunnerAware) error { return svc.Run(ctx) },
+					err:  nil,
+				},
+				{
+					name: "try to run again, should got error already running",
+					fn:   func(ctx context.Context, svc ServiceRunnerAware) error { return svc.Run(ctx) },
+					err:  errServiceRunnerAlreadyRunning,
+				},
+				{
+					name: "invoke ready",
+					fn:   func(ctx context.Context, svc ServiceRunnerAware) error { return svc.Ready(ctx) },
+					err:  nil,
+				},
+				{
+					name: "invoke ready again, should return nil",
+					fn:   func(ctx context.Context, svc ServiceRunnerAware) error { return svc.Ready(ctx) },
+					err:  nil,
+				},
+				{
+					name: "stop the tracker",
+					fn:   func(ctx context.Context, svc ServiceRunnerAware) error { return svc.Stop(ctx) },
+					err:  nil,
+				},
+				{
+					name: "stop the tracker again, should return nil",
+					fn:   func(ctx context.Context, svc ServiceRunnerAware) error { return svc.Stop(ctx) },
+					err:  nil,
+				},
+				{
+					name: "try to init again",
+					fn:   func(ctx context.Context, svc ServiceRunnerAware) error { return svc.Init(Context{}) },
+					err:  nil,
+				},
+				{
+					name: "try to run again",
+					fn:   func(ctx context.Context, svc ServiceRunnerAware) error { return svc.Run(ctx) },
+					err:  nil,
+				},
+				{
+					name: "invoke ready again, after stopped",
+					fn:   func(ctx context.Context, svc ServiceRunnerAware) error { return svc.Ready(ctx) },
+					err:  nil,
+				},
+				{
+					name: "try to stop again",
+					fn:   func(ctx context.Context, svc ServiceRunnerAware) error { return svc.Stop(ctx) },
+					err:  nil,
+				},
+			},
 		},
 		{
-			name: "try to run",
-			fn:   tracker.Run,
-			err:  nil,
+			name: "return constant error when invoking ready",
+			service: &serviceDoNothing{
+				onReady: func(ctx context.Context, sdn *serviceDoNothing) error {
+					return errCantCheckReadiness
+				},
+			},
+			subTests: []subTest{
+				{
+					name: "init",
+					fn:   func(ctx context.Context, svc ServiceRunnerAware) error { return svc.Init(Context{}) },
+					err:  nil,
+				},
+				{
+					name: "run",
+					fn:   func(ctx context.Context, svc ServiceRunnerAware) error { return svc.Run(ctx) },
+					err:  nil,
+				},
+				{
+					name: "return cannot check readiness",
+					fn: func(ctx context.Context, svc ServiceRunnerAware) error {
+						return svc.Ready(ctx)
+					},
+					err: errCantCheckReadiness,
+				},
+			},
 		},
 		{
-			name: "try to run again, should got error already running",
-			fn:   tracker.Run,
-			err:  errServiceRunnerAlreadyRunning,
-		},
-		{
-			name: "invoke ready",
-			fn:   tracker.Ready,
-			err:  nil,
-		},
-		{
-			name: "invoke ready again, should return nil",
-			fn:   tracker.Ready,
-			err:  nil,
-		},
-		{
-			name: "stop the tracker",
-			fn:   tracker.Stop,
-			err:  nil,
-		},
-		{
-			name: "stop the tracker again, should return nil",
-			fn:   tracker.Stop,
-			err:  nil,
-		},
-		{
-			name: "try to init again",
-			fn:   func(ctx context.Context) error { return tracker.Init(Context{}) },
-			err:  nil,
-		},
-		{
-			name: "try to run again",
-			fn:   tracker.Run,
-			err:  nil,
-		},
-		{
-			name: "invoke ready again, after stopped",
-			fn:   tracker.Ready,
-			err:  nil,
-		},
-		{
-			name: "try to stop again",
-			fn:   tracker.Stop,
-			err:  nil,
+			name: "ready check nearly exhausted",
+			service: &serviceDoNothing{
+				container: &atomic.Int32{},
+				onReady: func(ctx context.Context, sdn *serviceDoNothing) error {
+					at := sdn.container.(*atomic.Int32)
+					got := at.Add(1)
+					if got == 3 {
+						return nil
+					}
+					return errors.New("some error")
+				},
+			},
+			subTests: []subTest{
+				{
+					name: "init",
+					fn:   func(ctx context.Context, svc ServiceRunnerAware) error { return svc.Init(Context{}) },
+					err:  nil,
+				},
+				{
+					name: "run",
+					fn:   func(ctx context.Context, svc ServiceRunnerAware) error { return svc.Run(ctx) },
+					err:  nil,
+				},
+				{
+					name: "return nil",
+					fn: func(ctx context.Context, svc ServiceRunnerAware) error {
+						return svc.Ready(ctx)
+					},
+					err: nil,
+				},
+			},
 		},
 	}
 
 	for _, test := range tests {
-		t.Log(test.name)
-		if err := test.fn(context.Background()); err != test.err {
-			t.Fatalf("expecting error %v but got %v", test.err, err)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			tracker := newServiceStateTracker(test.service, slog.Default())
+			for _, st := range test.subTests {
+				t.Log(fmt.Sprintf("%s/%s", t.Name(), strings.ReplaceAll(st.name, " ", "_")))
+				if err := st.fn(context.Background(), tracker); !errors.Is(err, st.err) {
+					t.Fatalf("expecting error %v but got %v", st.err, err)
+				}
+			}
+		})
 	}
 }
 
@@ -402,9 +482,11 @@ func TestServiceStartOrder(t *testing.T) {
 }
 
 type serviceDoNothing struct {
-	name   string
-	logger *slog.Logger
-	onRun  func(ctx context.Context, sdn *serviceDoNothing) error
+	name      string
+	logger    *slog.Logger
+	container any
+	onRun     func(ctx context.Context, sdn *serviceDoNothing) error
+	onReady   func(ctx context.Context, sdn *serviceDoNothing) error
 }
 
 func (s *serviceDoNothing) Name() string {
@@ -429,6 +511,11 @@ func (s *serviceDoNothing) Run(ctx context.Context) error {
 }
 
 func (s *serviceDoNothing) Ready(ctx context.Context) error {
+	if s.onReady != nil {
+		if err := s.onReady(ctx, s); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

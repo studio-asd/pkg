@@ -54,8 +54,6 @@ func TestAdminServerConfig(t *testing.T) {
 
 // TestAdminEndpoints tests all endpoints provided by the admin server and whether the endpoint returns 200(OK).
 func TestAdminEndpoints(t *testing.T) {
-	t.Parallel()
-
 	endpoints := []string{
 		"/health",
 		"/ready",
