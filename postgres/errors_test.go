@@ -43,7 +43,7 @@ func TestErrorToPostgresError(t *testing.T) {
 		t.Run(test.expect.Error(), func(t *testing.T) {
 			t.Parallel()
 			for _, err := range test.errs {
-				gotErr := ErrToPostgresError(err)
+				_, gotErr := tryErrToPostgresError(err)
 				if !errors.Is(gotErr, test.expect) {
 					t.Fatalf("expecting error %v but got %v", test.expect, gotErr)
 				}

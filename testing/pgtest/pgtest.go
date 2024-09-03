@@ -43,7 +43,22 @@ func checkTesting() {
 //
 // WARNING: Please use this function carefully as by default, this will automatically drops the database if the database is exists.
 // Please don't use this function out fo the test code. To not drop the database, PGTEST_SKIP_DROP environment variable need to be set.
-func CreateDatabase(ctx context.Context, pg *postgres.Postgres, name string, recreateIfExists bool) error {
+func CreateDatabase(ctx context.Context, dsn, name string, recreateIfExists bool) error {
+	pgDSN, err := postgres.ParseDSN(dsn)
+	if err != nil {
+		return err
+	}
+	pg, err := postgres.Connect(ctx, postgres.ConnectConfig{
+		Driver:   "pgx",
+		Username: pgDSN.Username,
+		Password: pgDSN.Password,
+		Host:     pgDSN.Host,
+		Port:     pgDSN.Port,
+		SSLMode:  pgDSN.SSLMode,
+	})
+	if err != nil {
+		return err
+	}
 	// recreateIfExists forcefully create the database if the database is already exists, otherwise it will just ignore the
 	// fact that the database is exists and continue.
 	if !recreateIfExists {
@@ -57,7 +72,7 @@ func CreateDatabase(ctx context.Context, pg *postgres.Postgres, name string, rec
 	}
 
 	query := fmt.Sprintf("CREATE DATABASE %s", name)
-	_, err := pg.Exec(ctx, query)
+	_, err = pg.Exec(ctx, query)
 	if err != nil && err != context.Canceled {
 		// Skip to drop the database because we might don't want to drop the database for the whole test.
 		if skipDrop != "" {

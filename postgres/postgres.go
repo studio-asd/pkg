@@ -4,7 +4,8 @@
 // The library used pgxpool by default because pgxconn is not concurrently safe
 // to be used by default. Pgxpool is a client-side connection pool implementation
 // and not to be confused with something like PgBouncer. It is safe to use PgBouncer
-// on top of pgxpool.
+// on top of pgxpool as PgBouncer v1.21 already supports prepared statements inside
+// the transaction mode.
 
 package postgres
 
@@ -55,6 +56,21 @@ func (p *Postgres) InTransaction() bool {
 // Config returns the copy of connection configuration.
 func (p *Postgres) Config() ConnectConfig {
 	return p.config
+}
+
+// NewConfigFromDSN creates a new connect configuration from postgresql data source name.
+func NewConfigFromDSN(dsn string) (ConnectConfig, error) {
+	pgDSN, err := ParseDSN(dsn)
+	if err != nil {
+		return ConnectConfig{}, err
+	}
+	return ConnectConfig{
+		Username: pgDSN.Username,
+		Password: pgDSN.Password,
+		Host:     pgDSN.Host,
+		Port:     pgDSN.Port,
+		SSLMode:  pgDSN.SSLMode,
+	}, nil
 }
 
 // Connect returns connected Postgres object.
@@ -119,8 +135,14 @@ func (p *Postgres) query(ctx context.Context, query string, params ...any) (rc *
 	)
 	defer func() {
 		if err != nil {
+			var code string
+			code, err = tryErrToPostgresError(err)
 			span.SetStatus(codes.Error, err.Error())
-			err = ErrToPostgresError(err)
+			if code != "" {
+				span.SetAttributes(
+					attribute.String("pg.errCode", code),
+				)
+			}
 		}
 		span.End()
 	}()
@@ -150,18 +172,40 @@ func (p *Postgres) query(ctx context.Context, query string, params ...any) (rc *
 	return
 }
 
-func (p *Postgres) RunQuery(ctx context.Context, query string, f func(*RowsCompat) error, params ...any) error {
-	rows, err := p.query(ctx, query, params...)
+func (p *Postgres) RunQuery(ctx context.Context, query string, f func(*RowsCompat) error, params ...any) (err error) {
+	spanCtx, span := p.tracer.Tracer.Start(
+		ctx,
+		"postgres.runQuery",
+		trace.WithSpanKind(trace.SpanKindInternal),
+	)
+	defer func() {
+		if err != nil {
+			var code string
+			code, err = tryErrToPostgresError(err)
+			span.SetStatus(codes.Error, err.Error())
+			if code != "" {
+				span.SetAttributes(
+					attribute.String("pg.errCode", code),
+				)
+			}
+		}
+		span.End()
+	}()
+
+	var rows *RowsCompat
+	rows, err = p.query(spanCtx, query, params...)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
+
 	for rows.Next() {
-		if err := f(rows); err != nil {
-			return ErrToPostgresError(err)
+		if fErr := f(rows); fErr != nil {
+			err = fErr
+			return
 		}
 	}
-	return ErrToPostgresError(rows.Err())
+	return
 }
 
 func (p *Postgres) QueryRow(ctx context.Context, query string, params ...any) *RowCompat {
@@ -237,7 +281,7 @@ type Transaction interface {
 
 func (p *Postgres) Transact(ctx context.Context, iso sql.IsolationLevel, txFunc func(context.Context, *Postgres) error) error {
 	err := p.transact(ctx, iso, txFunc)
-	return ErrToPostgresError(err)
+	return err
 }
 
 func (p *Postgres) beginTx(ctx context.Context, iso sql.IsolationLevel) (tx *TransactCompat, err error) {
@@ -306,7 +350,14 @@ func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc 
 	)
 	defer func() {
 		if err != nil {
+			var code string
+			code, err = tryErrToPostgresError(err)
 			span.SetStatus(codes.Error, err.Error())
+			if code != "" {
+				span.SetAttributes(
+					attribute.String("pg.errCode", code),
+				)
+			}
 		}
 		span.End()
 	}()
@@ -363,8 +414,14 @@ func (p *Postgres) Prepare(ctx context.Context, query string) (sc *StmtCompat, e
 	)
 	defer func() {
 		if err != nil {
+			var code string
+			code, err = tryErrToPostgresError(err)
 			span.SetStatus(codes.Error, err.Error())
-			err = ErrToPostgresError(err)
+			if code != "" {
+				span.SetAttributes(
+					attribute.String("pg.errCode", code),
+				)
+			}
 		}
 		span.End()
 	}()
@@ -407,8 +464,14 @@ func (p *Postgres) Ping(ctx context.Context) (err error) {
 	span.SetAttributes(p.config.TracerConfig.traceAttributesFromContext(ctx, "")...)
 	defer func() {
 		if err != nil {
+			var code string
+			code, err = tryErrToPostgresError(err)
 			span.SetStatus(codes.Error, err.Error())
-			err = ErrToPostgresError(err)
+			if code != "" {
+				span.SetAttributes(
+					attribute.String("pg.errCode", code),
+				)
+			}
 		}
 		span.End()
 	}()

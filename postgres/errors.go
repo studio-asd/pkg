@@ -68,21 +68,21 @@ func IsPQError(err error) (string, bool) {
 	return "", false
 }
 
-// ErrToPostgresError converts PostgreSQL error with codes to the internal error type.
-func ErrToPostgresError(err error) error {
+// tryErrToPostgresError converts PostgreSQL error with codes to the internal error type.
+func tryErrToPostgresError(err error) (string, error) {
 	if err == nil {
-		return nil
+		return "", nil
 	}
 	code, ok := IsPQError(err)
 	if !ok {
-		return err
+		return "", err
 	}
 	pgErr, ok := postgresErrCodeToError(code)
 	if !ok {
-		return err
+		return code, err
 	}
 	// Join the errors so errors.Is and errors.As behave the same with the first error while keeping the internal
 	// type to be checked via errors.Is.
 	pgErr = errors.Join(pgErr, err)
-	return pgErr
+	return code, pgErr
 }

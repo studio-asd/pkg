@@ -28,24 +28,12 @@ CREATE TABLE IF NOT EXISTS testing (
 )
 
 func TestMain(m *testing.M) {
-	conn, err := postgres.Connect(context.Background(), postgres.ConnectConfig{
-		Driver:   "postgres",
-		Username: "postgres",
-		Password: "postgres",
-		Host:     "localhost",
-		Port:     "5432",
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	if err := CreateDatabase(context.Background(), conn, dbName, true); err != nil {
-		log.Fatal(err)
-	}
-	if err := conn.Close(); err != nil {
+	dsn := "postgres://postgres:postgres@localhost:5432/"
+	if err := CreateDatabase(context.Background(), dsn, dbName, true); err != nil {
 		log.Fatal(err)
 	}
 
-	pgconn, err = postgres.Connect(
+	pgconn, err := postgres.Connect(
 		context.Background(),
 		postgres.ConnectConfig{
 			Driver:   "postgres",

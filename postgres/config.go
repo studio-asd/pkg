@@ -114,6 +114,8 @@ type TracerConfig struct {
 	Tracer trace.Tracer
 	// RecordArgs is a flag to records the query arguments.
 	RecordArgs bool
+	// DefaultAttributes is the default attributes that will get appended to all traces inside the package.
+	DefaultAttributes []attribute.KeyValue
 
 	// below configurations are injected to enrich the trace/span atrrbutes.
 	host     string
@@ -136,8 +138,12 @@ func (t *TracerConfig) traceAttributes(query string, args ...any) []attribute.Ke
 		attribute.String("pg.config.database", t.database),
 		attribute.String("pg.config.user", t.user),
 	}
+	// Append the default attributes if we have it.
+	if len(t.DefaultAttributes) > 0 {
+		attrs = append(attrs, t.DefaultAttributes...)
+	}
 	if query != "" {
-		attrs = append(attrs, attribute.String("postgres.query", query))
+		attrs = append(attrs, attribute.String("postgres.query_value", query))
 	}
 	if t.RecordArgs {
 		attrs = append(attrs, attribute.StringSlice("postgres.query_args", queryArgsToStringSlice(args)))
