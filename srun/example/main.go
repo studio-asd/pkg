@@ -17,7 +17,7 @@ type Config struct {
 func main() {
 	// srun.New().MustRun() wraps the main function and ensure everything is wrapped inside srun scope.
 	srun.New(srun.Config{
-		ServiceName: "testing",
+		Name: "testing",
 		Healthcheck: srun.HealthcheckConfig{
 			// Please enable the healthcheck if you are aware of what you are doing. The healthcheck service will occupied some of your resources
 			// to do active and passive healthcheck as it will spawn a new service and runs a long running goroutine.

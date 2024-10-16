@@ -68,12 +68,29 @@ func IsPQError(err error) (string, bool) {
 	return "", false
 }
 
+// isPQError is the internal version of IsPQError. This function won't check both pgx and libpq error as the packge
+// already know what package is being used.
+func isPQError(err error, isPgx bool) (string, bool) {
+	if isPgx {
+		var pgerr *pgconn.PgError
+		if errors.As(err, &pgerr) {
+			return pgerr.Code, true
+		}
+		return "", false
+	}
+	var pqerr *pq.Error
+	if errors.As(err, &pqerr) {
+		return string(pqerr.Code), true
+	}
+	return "", false
+}
+
 // tryErrToPostgresError converts PostgreSQL error with codes to the internal error type.
-func tryErrToPostgresError(err error) (string, error) {
+func tryErrToPostgresError(err error, isPgx bool) (string, error) {
 	if err == nil {
 		return "", nil
 	}
-	code, ok := IsPQError(err)
+	code, ok := isPQError(err, isPgx)
 	if !ok {
 		return "", err
 	}

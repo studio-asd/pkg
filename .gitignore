@@ -3,3 +3,4 @@ testing.pid
 .zed
 aws
 grpc
+kafka

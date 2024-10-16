@@ -60,7 +60,7 @@ func queryArgsToStringSlice(args []any) []string {
 		case float32:
 			strAttributes[idx] = strconv.FormatFloat(float64(v), 'f', 0, 32)
 		case float64:
-			strAttributes[idx] = strconv.FormatFloat(float64(v), 'f', 0, 32)
+			strAttributes[idx] = strconv.FormatFloat(float64(v), 'f', 0, 64)
 		default:
 			// Unfortunately, this part will allocate quite significantly as data.Args is []any, and each 'any'
 			// might not be string. We cannot convert all of them to string via reflect either as there are too

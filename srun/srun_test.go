@@ -114,7 +114,7 @@ func TestRunReturn(t *testing.T) {
 				t.Setenv(k, v)
 			}
 			conf := Config{
-				ServiceName: "testing",
+				Name: "testing",
 				Admin: AdminConfig{
 					Disable: true,
 				},
@@ -136,10 +136,10 @@ func TestGracefulShutdown(t *testing.T) {
 	t.Run("graceful_shutdown", func(t *testing.T) {
 		t.Parallel()
 		config := Config{
-			ServiceName: "test_graceful_shutdown",
-			Admin:       AdminConfig{Disable: true},
-			OtelTracer:  OTelTracerConfig{Disable: true},
-			OtelMetric:  OtelMetricConfig{Disable: true},
+			Name:       "test_graceful_shutdown",
+			Admin:      AdminConfig{Disable: true},
+			OtelTracer: OTelTracerConfig{Disable: true},
+			OtelMetric: OtelMetricConfig{Disable: true},
 		}
 		err := New(config).Run(func(ctx context.Context, runner ServiceRunner) error {
 			return Serve("testing", runner, func(ctx Context) error {
@@ -155,10 +155,10 @@ func TestGracefulShutdown(t *testing.T) {
 	t.Run("graceful_shutdown_timeout", func(t *testing.T) {
 		t.Parallel()
 		config := Config{
-			ServiceName: "testing_graceful_shutdown_timeout",
-			Admin:       AdminConfig{Disable: true},
-			OtelTracer:  OTelTracerConfig{Disable: true},
-			OtelMetric:  OtelMetricConfig{Disable: true},
+			Name:       "testing_graceful_shutdown_timeout",
+			Admin:      AdminConfig{Disable: true},
+			OtelTracer: OTelTracerConfig{Disable: true},
+			OtelMetric: OtelMetricConfig{Disable: true},
 			Timeout: TimeoutConfig{
 				ShutdownGracefulPeriod: time.Second,
 			},
@@ -187,10 +187,10 @@ func TestGracefulShutdown(t *testing.T) {
 	t.Run("graceful_shutdown_no_timeout", func(t *testing.T) {
 		t.Parallel()
 		config := Config{
-			ServiceName: "testing_graceful_shutdown_timeout",
-			Admin:       AdminConfig{Disable: true},
-			OtelTracer:  OTelTracerConfig{Disable: true},
-			OtelMetric:  OtelMetricConfig{Disable: true},
+			Name:       "testing_graceful_shutdown_timeout",
+			Admin:      AdminConfig{Disable: true},
+			OtelTracer: OTelTracerConfig{Disable: true},
+			OtelMetric: OtelMetricConfig{Disable: true},
 			Timeout: TimeoutConfig{
 				ShutdownGracefulPeriod: time.Second,
 			},
@@ -233,10 +233,10 @@ level=INFO msg="[Service] testing_1: STOPPED" logger_scope=service_runner
 
 	buff := bytes.NewBuffer(nil)
 	config := Config{
-		ServiceName: "testing",
-		Admin:       AdminConfig{Disable: true},
-		OtelTracer:  OTelTracerConfig{Disable: true},
-		OtelMetric:  OtelMetricConfig{Disable: true},
+		Name:       "testing",
+		Admin:      AdminConfig{Disable: true},
+		OtelTracer: OTelTracerConfig{Disable: true},
+		OtelMetric: OtelMetricConfig{Disable: true},
 		Logger: LoggerConfig{
 			Format: LogFormatText,
 			Output: buff,

@@ -3,8 +3,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"errors"
-	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -30,9 +28,8 @@ func (r *RowsCompat) Close() error {
 
 func (r *RowsCompat) Err() (err error) {
 	defer func() {
-		if err != nil {
-			_, err = tryErrToPostgresError(err)
-		}
+		_, err = tryErrToPostgresError(err, r.pgxRows != nil)
+		return
 	}()
 	if r.pgxRows != nil {
 		err = r.pgxRows.Err()
@@ -52,17 +49,12 @@ func (r *RowsCompat) Next() bool {
 func (r *RowsCompat) Scan(dest ...any) error {
 	if r.pgxRows != nil {
 		err := r.pgxRows.Scan(dest...)
-		// Append the error with sql.ErrNoRows so we can keep using errors.Is(error, sql.ErrNoRows).
-		if err != nil {
-			_, err = tryErrToPostgresError(err)
-			if errors.Is(err, pgx.ErrNoRows) {
-				err = errors.Join(err, sql.ErrNoRows)
-			}
-			err = fmt.Errorf("pgx_rowscompat: %w", err)
-		}
+		// In pgx version 5.7.0(https://github.com/jackc/pgx/blob/master/CHANGELOG.md#570-september-7-2024), pgx already incorporate the
+		// standard sql.ErrNoRows into the error, so we don't have to wrap them anymore as it will works out of the box.
+		_, err = tryErrToPostgresError(err, true)
 		return err
 	}
-	_, err := tryErrToPostgresError(r.rows.Scan(dest...))
+	_, err := tryErrToPostgresError(r.rows.Scan(dest...), false)
 	return err
 }
 
@@ -74,16 +66,12 @@ type RowCompat struct {
 func (r *RowCompat) Scan(dest ...any) error {
 	if r.pgxRow != nil {
 		err := r.pgxRow.Scan(dest...)
-		// Append the error with sql.ErrNoRows so we can keep using errors.Is(error, sql.ErrNoRows).
-		if err != nil {
-			_, err = tryErrToPostgresError(err)
-			if errors.Is(err, pgx.ErrNoRows) {
-				err = errors.Join(err, sql.ErrNoRows)
-			}
-		}
+		// In pgx version 5.7.0(https://github.com/jackc/pgx/blob/master/CHANGELOG.md#570-september-7-2024), pgx already incorporate the
+		// standard sql.ErrNoRows into the error, so we don't have to wrap them anymore as it will works out of the box.
+		_, err = tryErrToPostgresError(err, true)
 		return err
 	}
-	_, err := tryErrToPostgresError(r.row.Scan(dest...))
+	_, err := tryErrToPostgresError(r.row.Scan(dest...), false)
 	return err
 }
 
@@ -146,10 +134,11 @@ func (s *StmtCompat) Query(ctx context.Context, args ...any) (rc *RowsCompat, er
 		trace.WithAttributes(s.spanAttrs...),
 	)
 
+	isPgx := false
 	defer func() {
 		if err != nil {
 			var code string
-			code, err = tryErrToPostgresError(err)
+			code, err = tryErrToPostgresError(err, isPgx)
 			span.SetStatus(codes.Error, err.Error())
 			if code != "" {
 				span.SetAttributes(
@@ -161,6 +150,7 @@ func (s *StmtCompat) Query(ctx context.Context, args ...any) (rc *RowsCompat, er
 	}()
 
 	if s.pgxTx != nil {
+		isPgx = true
 		rows, queryErr := s.pgxTx.Query(spanCtx, s.pgxStmtDesc.SQL, args...)
 		if queryErr != nil {
 			err = queryErr
@@ -170,6 +160,7 @@ func (s *StmtCompat) Query(ctx context.Context, args ...any) (rc *RowsCompat, er
 		return
 	}
 	if s.pgxdb != nil {
+		isPgx = true
 		rows, queryErr := s.pgxdb.Query(spanCtx, s.sql, args...)
 		if queryErr != nil {
 			err = queryErr
@@ -195,10 +186,11 @@ func (s *StmtCompat) Exec(ctx context.Context, args ...any) (er *ExecResultCompa
 		trace.WithAttributes(s.spanAttrs...),
 	)
 
+	isPgx := false
 	defer func() {
 		if err != nil {
 			var code string
-			code, err = tryErrToPostgresError(err)
+			code, err = tryErrToPostgresError(err, isPgx)
 			span.SetStatus(codes.Error, err.Error())
 			if code != "" {
 				span.SetAttributes(
@@ -210,6 +202,7 @@ func (s *StmtCompat) Exec(ctx context.Context, args ...any) (er *ExecResultCompa
 	}()
 
 	if s.pgxTx != nil {
+		isPgx = true
 		result, execErr := s.pgxTx.Exec(spanCtx, s.pgxStmtDesc.SQL, args...)
 		if execErr != nil {
 			err = execErr
@@ -219,6 +212,7 @@ func (s *StmtCompat) Exec(ctx context.Context, args ...any) (er *ExecResultCompa
 		return
 	}
 	if s.pgxdb != nil {
+		isPgx = true
 		result, execErr := s.pgxdb.Exec(spanCtx, s.sql, args...)
 		if execErr != nil {
 			err = execErr
@@ -244,9 +238,10 @@ func (s *StmtCompat) Close() (err error) {
 		trace.WithAttributes(s.spanAttrs...),
 	)
 
+	isPgx := false
 	defer func() {
 		var code string
-		code, err = tryErrToPostgresError(err)
+		code, err = tryErrToPostgresError(err, isPgx)
 		span.SetStatus(codes.Error, err.Error())
 		if code != "" {
 			span.SetAttributes(
@@ -257,6 +252,7 @@ func (s *StmtCompat) Close() (err error) {
 	}()
 
 	if s.pgxdb != nil || s.pgxTx != nil {
+		isPgx = true
 		return nil
 	}
 	err = s.stmt.Close()
@@ -265,6 +261,9 @@ func (s *StmtCompat) Close() (err error) {
 
 // TransactCompat handle backwards compatibility guarantee of different postgreSQL libraries. The object doesn't really replicate the tx object
 // for both pgx and database/sql because we will encapsulate the tx with another Postgres type.
+//
+// Operations in TransactCompat will not try to convert the error to postgres error as it will be used further by higher level functions. We never
+// expose the TransactCompat directly, so its okay.
 type TransactCompat struct {
 	tx    *sql.Tx
 	pgxTx pgx.Tx
@@ -277,20 +276,13 @@ type TransactCompat struct {
 func (t *TransactCompat) Rollback() (err error) {
 	spanCtx, span := t.tracer.Tracer.Start(
 		t.ctx,
-		"postgres.rollback",
+		"postgres.tx.rollback",
 		trace.WithSpanKind(trace.SpanKindInternal),
 		trace.WithAttributes(t.spanAttrs...),
 	)
 	defer func() {
 		if err != nil {
-			var code string
-			code, err = tryErrToPostgresError(err)
 			span.SetStatus(codes.Error, err.Error())
-			if code != "" {
-				span.SetAttributes(
-					attribute.String("pg.errCode", code),
-				)
-			}
 		}
 		span.End()
 	}()
@@ -306,20 +298,13 @@ func (t *TransactCompat) Rollback() (err error) {
 func (t *TransactCompat) Commit() (err error) {
 	spanCtx, span := t.tracer.Tracer.Start(
 		t.ctx,
-		"postgres.commit",
+		"postgres.tx.commit",
 		trace.WithSpanKind(trace.SpanKindInternal),
 		trace.WithAttributes(t.spanAttrs...),
 	)
 	defer func() {
 		if err != nil {
-			var code string
-			code, err = tryErrToPostgresError(err)
 			span.SetStatus(codes.Error, err.Error())
-			if code != "" {
-				span.SetAttributes(
-					attribute.String("pg.errCode", code),
-				)
-			}
 		}
 		span.End()
 	}()

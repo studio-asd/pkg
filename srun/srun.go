@@ -30,6 +30,34 @@ const (
 	serviceInitDefaultTimeout      = time.Minute
 )
 
+const (
+	runnerStateInitiating int32 = iota + 1
+	runnerStateStarting
+	runnerStateStarted
+	runnerStateRunning
+	runnerStateShuttingDown
+	runnerStateStopped
+)
+
+func runnerStateToString(state int32) string {
+	switch state {
+	case runnerStateInitiating:
+		return "INITIATING"
+	case runnerStateStarting:
+		return "STARTING"
+	case runnerStateStarted:
+		return "STARTED"
+	case runnerStateRunning:
+		return "RUNNING"
+	case runnerStateShuttingDown:
+		return "SHUTTING_DOWN"
+	case runnerStateStopped:
+		return "STOPPED"
+	default:
+		return "UNKNOWN_STATE"
+	}
+}
+
 type serviceState int
 
 // String returns the state in string.
@@ -111,7 +139,7 @@ type Context struct {
 // ServiceRunnerAware interface defines that an object is aware that it needs to comply with the service runner
 // semantics so we can easily integrate their lifecycle to the service runner.
 //
-// PreRun, Run and Stop functions injected by runner Context so the service can use runner properties in their program.
+// Init function injected by runner Context so the service can use runner properties in their program.
 // The context is being passed as a struct value(without pointer) because it's not intended to be passed to any chield object
 // or function. You can pass the things that you need instead the whole context.
 type ServiceRunnerAware interface {
@@ -199,7 +227,7 @@ func newRegistrar(r *Runner) *Registrar {
 		context: Context{
 			// Assign a new logger from the default logger(we have configured this before), so each logger will have default attributes
 			// called 'logger_scope' to tell the scope of the logger.
-			Logger: slog.Default().With(slog.String("logger_scope", r.config.ServiceName)),
+			Logger: slog.Default().With(slog.String("logger_scope", r.config.Name)),
 			Meter:  r.otelMeter,
 			Tracer: r.otelTracer,
 		},
@@ -210,6 +238,8 @@ func newRegistrar(r *Runner) *Registrar {
 type Runner struct {
 	config      *Config
 	serviceName string
+	// state is the current state of runner.
+	state int32
 	// Services is the list of objects that can be controlled by the runner.
 	services []*ServiceStateTracker
 
@@ -228,85 +258,6 @@ type Runner struct {
 	otelMeter metric.Meter
 	// healthcheckService provide healthchecks for all services and multiplex the check notification.
 	healthcheckService *HealthcheckService
-}
-
-type Config struct {
-	// ServiceName defines the service name and the pid file name.
-	ServiceName string
-	Upgrader    UpgraderConfig
-	Admin       AdminConfig
-	OtelTracer  OTelTracerConfig
-	OtelMetric  OtelMetricConfig
-	Logger      LoggerConfig
-	Healthcheck HealthcheckConfig
-	Timeout     TimeoutConfig
-	// deadlineDuration is the timeout duration for the runner to run. The program will exit with
-	// ErrRunDeadlineTimeout when deadline exceeded.
-	//
-	// To enable run deadline, please use 'SRUN_DEADLINE_TIMEOUT' environment variable. For example SRUN_DEADLINE_TIMEOUT=30s.
-	//
-	// This feature is useful for several reasons:
-	//	1. We can use it to test our binary to check whether it really runs or not.
-	//	2. We can use it to limit the execution time in an environment like function as a service.
-	DeadlineDuration time.Duration
-}
-
-func (c *Config) Validate() error {
-	if c.ServiceName == "" {
-		return errors.New("service name cannot be empty")
-	}
-	if c.Timeout.InitTimeout == 0 {
-		c.Timeout.InitTimeout = serviceInitDefaultTimeout
-	}
-	if c.Timeout.ReadyTimeout == 0 {
-		c.Timeout.ReadyTimeout = serviceReadyDefaultTimeout
-	}
-	if c.Timeout.ShutdownGracefulPeriod == 0 {
-		c.Timeout.ShutdownGracefulPeriod = gracefulShutdownDefaultTimeout
-	}
-	if c.Healthcheck.Interval == 0 {
-		c.Healthcheck.Interval = healthcheckDefaultInterval
-	}
-	if c.Healthcheck.Timeout == 0 {
-		c.Healthcheck.Timeout = healthcheckDefaultTimeout
-	}
-
-	// Respect the configuration from environment variable if available.
-	envReadyTimeout := os.Getenv("SRUN_READY_TIMEOUT")
-	if envReadyTimeout != "" {
-		readyTimeout, err := time.ParseDuration(envReadyTimeout)
-		if err != nil {
-			return err
-		}
-		c.Timeout.ReadyTimeout = readyTimeout
-	}
-	envDeadlineTimeout := os.Getenv("SRUN_DEADLINE_TIMEOUT")
-	if envDeadlineTimeout != "" {
-		deadlineTimeout, err := time.ParseDuration(envDeadlineTimeout)
-		if err != nil {
-			return err
-		}
-		c.DeadlineDuration = deadlineTimeout
-	}
-	envGracefulTimeout := os.Getenv("SRUN_GRACEFUL_TIMEOUT")
-	if envGracefulTimeout != "" {
-		gracefulTimeout, err := time.ParseDuration(envGracefulTimeout)
-		if err != nil {
-			return err
-		}
-		c.Timeout.ShutdownGracefulPeriod = gracefulTimeout
-	}
-	return nil
-}
-
-// TimeoutConfig is timeout configuration for several configurable configurations.
-type TimeoutConfig struct {
-	// InitTimeout is the timeout to initiate a service. The timeout is per-service and not the total duration of initialization.
-	InitTimeout time.Duration
-	// ReadyTimeout is the timeout to wait for a service to be ready. The timeout is per-service and not the total duration of ready wait.
-	ReadyTimeout time.Duration
-	// ShutdownGracefulPeriod is the timeout for runner waiting for all services to stop.
-	ShutdownGracefulPeriod time.Duration
 }
 
 // Error is a helper function that returns functions that satisfy srun.Run. The helper function can be used to easily wrap an error when
@@ -348,7 +299,7 @@ func New(config Config) *Runner {
 	)
 
 	if config.Upgrader.SelfUpgrade {
-		pidFile := fmt.Sprintf("%s.pid", config.ServiceName)
+		pidFile := fmt.Sprintf("%s.pid", config.Name)
 		upg, err = newUpgrader(pidFile, syscall.SIGHUP)
 		if err != nil {
 			panic(err)
@@ -368,7 +319,7 @@ func New(config Config) *Runner {
 	}
 
 	r := &Runner{
-		serviceName: config.ServiceName,
+		serviceName: config.Name,
 		config:      conf,
 		ctx:         ctx,
 		// Assign a new logger from the default logger(we have configured this before), so each logger will have default attributes

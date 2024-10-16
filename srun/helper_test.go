@@ -29,10 +29,10 @@ func TestConcurrentServices(t *testing.T) {
 	}
 
 	runnerConfig := Config{
-		ServiceName: "concurrent-test",
-		Admin:       AdminConfig{Disable: true},
-		OtelTracer:  OTelTracerConfig{Disable: true},
-		OtelMetric:  OtelMetricConfig{Disable: true},
+		Name:       "concurrent-test",
+		Admin:      AdminConfig{Disable: true},
+		OtelTracer: OTelTracerConfig{Disable: true},
+		OtelMetric: OtelMetricConfig{Disable: true},
 		Logger: LoggerConfig{
 			Format: LogFormatText,
 			// Log is ordered, so we can ignore the time.

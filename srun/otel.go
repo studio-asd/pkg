@@ -61,6 +61,7 @@ func newOTelTracerService(config OTelTracerConfig) (trace.Tracer, *LongRunningTa
 	tracer := provider.Tracer(config.serviceName)
 
 	fn := func(ctx Context) error {
+		// Wait until the context is cancalled to shutdown the provider.
 		<-ctx.Ctx.Done()
 
 		ctxTimeout, cancel := context.WithTimeout(context.Background(), time.Second*30)

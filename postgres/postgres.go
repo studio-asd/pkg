@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -35,10 +36,13 @@ type Postgres struct {
 	// it will introduce a race.
 	tracer *TracerConfig
 
-	db  *sql.DB
-	pgx *pgxpool.Pool
-	tx  Transaction
+	db    *sql.DB
+	pgx   *pgxpool.Pool
+	tx    Transaction
+	txIso sql.IsolationLevel
 
+	// cancelMonitorFn is a context cancel func to cancel/shutdown the monitoring gororutine.
+	cancelMonitorFn context.CancelFunc
 	// searchPathMu protects set of the searchpath.
 	searchPathMu sync.RWMutex
 	searchPath   string // default schema separated by comma.
@@ -49,8 +53,12 @@ type Postgres struct {
 
 // InTransaction returns whether the postgres object is currently in transaction or not. The information need to be
 // exposed via a function because we don't want to expose the 'tx' object.
-func (p *Postgres) InTransaction() bool {
-	return p.tx != nil
+func (p *Postgres) InTransaction() (ok bool, iso sql.IsolationLevel) {
+	ok = p.tx != nil
+	if ok {
+		iso = p.txIso
+	}
+	return
 }
 
 // Config returns the copy of connection configuration.
@@ -113,12 +121,19 @@ func Connect(ctx context.Context, config ConnectConfig) (*Postgres, error) {
 		}
 	}
 
+	monitorCtx, cancel := context.WithCancel(context.Background())
 	p := &Postgres{
-		config:     config,
-		tracer:     &config.TracerConfig,
-		db:         db,
-		pgx:        pgxdb,
-		searchPath: config.SearchPath,
+		config:          config,
+		tracer:          &config.TracerConfig,
+		db:              db,
+		pgx:             pgxdb,
+		searchPath:      config.SearchPath,
+		cancelMonitorFn: cancel,
+	}
+	// Start the monitoring goroutine if monitor configuration is on, we want to monitor the number of connections
+	// and the general stats of the postgres object.
+	if config.MeterConfig.Monitor {
+		go monitorPostgresStats(monitorCtx, p)
 	}
 	return p, nil
 }
@@ -136,7 +151,7 @@ func (p *Postgres) query(ctx context.Context, query string, params ...any) (rc *
 	defer func() {
 		if err != nil {
 			var code string
-			code, err = tryErrToPostgresError(err)
+			code, err = tryErrToPostgresError(err, p.IsPgx())
 			span.SetStatus(codes.Error, err.Error())
 			if code != "" {
 				span.SetAttributes(
@@ -181,7 +196,7 @@ func (p *Postgres) RunQuery(ctx context.Context, query string, f func(*RowsCompa
 	defer func() {
 		if err != nil {
 			var code string
-			code, err = tryErrToPostgresError(err)
+			code, err = tryErrToPostgresError(err, p.IsPgx())
 			span.SetStatus(codes.Error, err.Error())
 			if code != "" {
 				span.SetAttributes(
@@ -339,7 +354,7 @@ func (p *Postgres) beginTx(ctx context.Context, iso sql.IsolationLevel) (tx *Tra
 }
 
 func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc func(context.Context, *Postgres) error) (err error) {
-	if p.InTransaction() {
+	if ok, _ := p.InTransaction(); ok {
 		return errors.New("a DB Transact function was called on a DB already in a transaction")
 	}
 
@@ -351,7 +366,7 @@ func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc 
 	defer func() {
 		if err != nil {
 			var code string
-			code, err = tryErrToPostgresError(err)
+			code, err = tryErrToPostgresError(err, p.IsPgx())
 			span.SetStatus(codes.Error, err.Error())
 			if code != "" {
 				span.SetAttributes(
@@ -381,7 +396,7 @@ func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc 
 	}()
 
 	// Set the transaction span attributes including all metadata and informations. The downside of this is, the postgres.transact
-	// span won't have any metadata inside it.
+	// span won't have any metadata inside it if something happen in beginTx.
 	span.SetAttributes(tx.SpanAttributes()...)
 
 	// Create a new copy of Postgres and add the transaction object inside the object. This will make InTransaction() check to be true.
@@ -415,7 +430,7 @@ func (p *Postgres) Prepare(ctx context.Context, query string) (sc *StmtCompat, e
 	defer func() {
 		if err != nil {
 			var code string
-			code, err = tryErrToPostgresError(err)
+			code, err = tryErrToPostgresError(err, p.IsPgx())
 			span.SetStatus(codes.Error, err.Error())
 			if code != "" {
 				span.SetAttributes(
@@ -465,7 +480,7 @@ func (p *Postgres) Ping(ctx context.Context) (err error) {
 	defer func() {
 		if err != nil {
 			var code string
-			code, err = tryErrToPostgresError(err)
+			code, err = tryErrToPostgresError(err, p.IsPgx())
 			span.SetStatus(codes.Error, err.Error())
 			if code != "" {
 				span.SetAttributes(
@@ -516,6 +531,8 @@ func (p *Postgres) Close() (err error) {
 	}
 
 	defer func() {
+		// Cancel the monitoring goroutine and exit.
+		p.cancelMonitorFn()
 		if err != nil {
 			p.closeMu.Unlock()
 			return
@@ -540,4 +557,38 @@ func (p *Postgres) StdlibDB() *sql.DB {
 	// The pgx version will create a whole new connection instead of using the current one.
 	copyConf := p.pgx.Config().Copy()
 	return stdlib.OpenDB(*copyConf.ConnConfig)
+}
+
+// monitorPostgresStats creates a ticker loop and monitor the postgres database periodically via open telemetry.
+func monitorPostgresStats(ctx context.Context, p *Postgres) error {
+	ticker := time.NewTicker(time.Second * 20)
+	openConns, err := p.config.MeterConfig.Meter.Int64Counter("postgres.stats.max_open_conns")
+	if err != nil {
+		return err
+	}
+	idleConns, err := p.config.MeterConfig.Meter.Int64Counter("postgres.stats.idle_conns")
+	if err != nil {
+		return err
+	}
+	inUseConns, err := p.config.MeterConfig.Meter.Int64Counter("postgres.stats.in_use")
+	if err != nil {
+		return err
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			if p.pgx != nil {
+				idleConns.Add(ctx, int64(p.pgx.Stat().IdleConns()))
+				openConns.Add(ctx, int64(p.pgx.Stat().MaxConns()))
+				inUseConns.Add(ctx, p.pgx.Stat().AcquireCount())
+			} else {
+				idleConns.Add(ctx, int64(p.db.Stats().Idle))
+				openConns.Add(ctx, int64(p.db.Stats().MaxOpenConnections))
+				inUseConns.Add(ctx, int64(p.db.Stats().InUse))
+			}
+		}
+	}
 }

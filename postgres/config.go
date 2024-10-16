@@ -8,8 +8,10 @@ import (
 
 	"github.com/albertwidi/pkg/instrumentation"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	meternoop "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/trace"
-	"go.opentelemetry.io/otel/trace/noop"
+	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
 const (
@@ -41,6 +43,7 @@ type ConnectConfig struct {
 	ConnMaxLifetime time.Duration
 	// TracerConfig holds the tracer configuration along with otel tracer inside it.
 	TracerConfig TracerConfig
+	MeterConfig  MeterConfig
 }
 
 func (c *ConnectConfig) validate() error {
@@ -125,7 +128,7 @@ type TracerConfig struct {
 
 func (t *TracerConfig) validate() error {
 	if t.Tracer == nil {
-		t.Tracer = noop.NewTracerProvider().Tracer("noop")
+		t.Tracer = tracenoop.NewTracerProvider().Tracer("noop")
 	}
 	return nil
 }
@@ -159,4 +162,17 @@ func (t *TracerConfig) traceAttributesFromContext(ctx context.Context, query str
 		attrs = append(attrs, ta...)
 	}
 	return attrs
+}
+
+type MeterConfig struct {
+	// Monitor spawns background jobs to actively monitor the stats of Postgres database.
+	Monitor bool
+	Meter   metric.Meter
+}
+
+func (m *MeterConfig) validate() error {
+	if m.Meter == nil {
+		m.Meter = meternoop.NewMeterProvider().Meter("noop")
+	}
+	return nil
 }

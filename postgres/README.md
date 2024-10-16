@@ -10,6 +10,8 @@ This package provide some helper functions taken and modified from https://githu
 
 This package doesn't guarantee full backwards compatibility between `stdlib` and `jackq/pgx` because `pgx` use a lot of custom error inside the package itself. For example, `sql.ErrNoRows` is `pgx.ErrNoRows` in `pgx`. We tried to convert this back in some cases, but not all.
 
-## Testing
+## Tracing
 
-The package provide several opinionated helper functions with the aim to make testing easier. We use `testing.Testing()` to protect the helper function to be used outside of `*_test.go`.
+This package offers a comprehensive tracing via `opentelemetry`(by default).
+
+Configurations for `tracing` can be configured via `TraceConfig`.
