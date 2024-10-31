@@ -17,6 +17,8 @@ import (
 )
 
 func TestSetPathParamsValue(t *testing.T) {
+	t.Parallel()
+
 	type PathParam1 struct {
 		Key string `path:"key"`
 	}
@@ -96,6 +98,8 @@ func TestSetPathParamsValue(t *testing.T) {
 }
 
 func TestReadURLEncodedParams(t *testing.T) {
+	t.Parallel()
+
 	type testGetRequest struct {
 		RequestTypeQueryString
 		DummySchemaExample
@@ -207,6 +211,8 @@ func (t *TestRequestMultipleTypes) SchemaExample() RequestResponse {
 }
 
 func TestMultipleRequestTypes(t *testing.T) {
+	t.Parallel()
+
 	listener, err := net.Listen("tcp", ":")
 	if err != nil {
 		t.Fatal(err)

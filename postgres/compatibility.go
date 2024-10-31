@@ -242,11 +242,13 @@ func (s *StmtCompat) Close() (err error) {
 	defer func() {
 		var code string
 		code, err = tryErrToPostgresError(err, isPgx)
-		span.SetStatus(codes.Error, err.Error())
-		if code != "" {
-			span.SetAttributes(
-				attribute.String("pg.errCode", code),
-			)
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			if code != "" {
+				span.SetAttributes(
+					attribute.String("pg.errCode", code),
+				)
+			}
 		}
 		span.End()
 	}()

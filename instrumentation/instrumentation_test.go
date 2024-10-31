@@ -10,6 +10,8 @@ import (
 )
 
 func TestContextWithBaggage(t *testing.T) {
+	t.Parallel()
+
 	bg := Baggage{
 		RequestID:         "req_id",
 		APIName:           "api_name",
@@ -29,6 +31,8 @@ func TestContextWithBaggage(t *testing.T) {
 }
 
 func TestBaggageFromTextMapCarrier(t *testing.T) {
+	t.Parallel()
+
 	textMap := map[string]string{
 		requestIDInst:         "req_id",
 		apiNameInst:           "api_name",

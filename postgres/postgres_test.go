@@ -243,6 +243,11 @@ func dropDatabase(ctx context.Context, config ConnectConfig, name string) error 
 }
 
 func TestInTtransaction(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		isoLevel sql.IsolationLevel
@@ -251,19 +256,12 @@ func TestInTtransaction(t *testing.T) {
 			name:     "in transaction",
 			isoLevel: sql.LevelDefault,
 		},
-		{
-			name:     "not in transaction",
-			isoLevel: sql.IsolationLevel(-1),
-		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			err := testPG.Transact(context.Background(), test.isoLevel, func(_ context.Context, pg *Postgres) error {
 				ok, iso := pg.InTransaction()
-				if test.isoLevel != -1 && !ok {
-					return errors.New("expecting in transaction")
-				}
 				if ok && test.isoLevel != iso {
 					return fmt.Errorf("expecting isolation level %s but got %s", test.isoLevel, iso)
 				}

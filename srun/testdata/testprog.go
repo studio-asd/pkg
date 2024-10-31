@@ -10,7 +10,7 @@ import (
 
 func main() {
 	srun.New(srun.Config{
-		ServiceName: "testing",
+		Name: "testing",
 		Healthcheck: srun.HealthcheckConfig{
 			Enabled: false,
 		},

@@ -8,6 +8,8 @@ import (
 )
 
 func TestMethods(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		method       string
 		pattern      string

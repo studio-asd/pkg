@@ -20,8 +20,10 @@ const (
 // I18nMessage implements ErrorMessage interface that supports internationalization
 // of error message.
 type I18nMessage struct {
-	ID string
-	EN string
+	ID         string
+	EN         string
+	HTTPCode   int
+	CustomCode string
 }
 
 // String returns the default message from I18Message based on the request context. If the preferred

@@ -529,7 +529,7 @@ func TestServiceLogScope(t *testing.T) {
 		expectLog := `level=INFO msg="this is a log" logger_scope=service_runner
 `
 		s := New(Config{
-			ServiceName: "log_group",
+			Name: "log_group",
 			Logger: LoggerConfig{
 				Output:     buff,
 				RemoveTime: true,
@@ -549,7 +549,7 @@ func TestServiceLogScope(t *testing.T) {
 `
 
 		r := newRegistrar(New(Config{
-			ServiceName: "log_group",
+			Name: "log_group",
 			Logger: LoggerConfig{
 				Output:     buff,
 				RemoveTime: true,
@@ -576,7 +576,7 @@ level=INFO msg="[Service] a_service: STOPPED" logger_scope=service_runner
 `
 
 		s := New(Config{
-			ServiceName: "log_group",
+			Name: "log_group",
 			Admin: AdminConfig{
 				Disable: true,
 			},

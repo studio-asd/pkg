@@ -13,6 +13,7 @@ import (
 )
 
 func TestAdminServerConfig(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name   string
 		config *AdminServerConfig
@@ -32,6 +33,7 @@ func TestAdminServerConfig(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			if err := test.config.validate(); err != nil {
 				t.Fatal(err)
 			}

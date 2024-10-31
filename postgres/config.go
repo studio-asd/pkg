@@ -137,9 +137,9 @@ func (t *TracerConfig) validate() error {
 func (t *TracerConfig) traceAttributes(query string, args ...any) []attribute.KeyValue {
 	// initial informations about the configuration and connection attributes.
 	attrs := []attribute.KeyValue{
-		attribute.String("pg.config.host", t.host),
-		attribute.String("pg.config.database", t.database),
-		attribute.String("pg.config.user", t.user),
+		attribute.String("postgres.config.host", t.host),
+		attribute.String("postgres.config.database", t.database),
+		attribute.String("postgres.config.user", t.user),
 	}
 	// Append the default attributes if we have it.
 	if len(t.DefaultAttributes) > 0 {
@@ -165,9 +165,10 @@ func (t *TracerConfig) traceAttributesFromContext(ctx context.Context, query str
 }
 
 type MeterConfig struct {
-	// Monitor spawns background jobs to actively monitor the stats of Postgres database.
-	Monitor bool
-	Meter   metric.Meter
+	// MonitorInterval controls the interval of background job to actively monitor the stats of Postgres connection.
+	// If the value of interval is zero(0) then no background job will be spawn.
+	MonitorInterval time.Duration
+	Meter           metric.Meter
 }
 
 func (m *MeterConfig) validate() error {

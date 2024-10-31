@@ -1,11 +1,14 @@
 package api
 
+import "net/http"
+
 var _ error = (*ErrorJSON)(nil)
 
 // The default error message we will show to user if not message is specified.
 var defaultErrorMessage = I18nMessage{
-	EN: "Something is going wrong, please try again later",
-	ID: "Terjadi kesalahan pada server, mohon coba kembali beberapa saat lagi",
+	EN:       "Something is going wrong, please try again later",
+	ID:       "Terjadi kesalahan pada server, mohon coba kembali beberapa saat lagi",
+	HTTPCode: http.StatusInternalServerError,
 }
 
 // ErrorJSON allows the error response to be returned as error. The struct will be evaluated in the autoErrorResponseHandler middleware

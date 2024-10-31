@@ -132,7 +132,7 @@ func Connect(ctx context.Context, config ConnectConfig) (*Postgres, error) {
 	}
 	// Start the monitoring goroutine if monitor configuration is on, we want to monitor the number of connections
 	// and the general stats of the postgres object.
-	if config.MeterConfig.Monitor {
+	if config.MeterConfig.MonitorInterval > 0 {
 		go monitorPostgresStats(monitorCtx, p)
 	}
 	return p, nil
@@ -323,7 +323,7 @@ func (p *Postgres) beginTx(ctx context.Context, iso sql.IsolationLevel) (tx *Tra
 	if p.pgx != nil {
 		var pgxTx pgx.Tx
 		pgxTx, beginErr := p.pgx.BeginTx(spanCtx, pgx.TxOptions{IsoLevel: sqlIsoLevelToPgxIsoLevel(iso)})
-		if err != nil {
+		if beginErr != nil {
 			err = beginErr
 			return
 		}
@@ -338,7 +338,7 @@ func (p *Postgres) beginTx(ctx context.Context, iso sql.IsolationLevel) (tx *Tra
 		return
 	}
 	stdlibTx, beginErr := p.db.BeginTx(spanCtx, &sql.TxOptions{Isolation: iso})
-	if err != nil {
+	if beginErr != nil {
 		err = beginErr
 		return
 	}
@@ -561,7 +561,7 @@ func (p *Postgres) StdlibDB() *sql.DB {
 
 // monitorPostgresStats creates a ticker loop and monitor the postgres database periodically via open telemetry.
 func monitorPostgresStats(ctx context.Context, p *Postgres) error {
-	ticker := time.NewTicker(time.Second * 20)
+	ticker := time.NewTicker(p.config.MeterConfig.MonitorInterval)
 	openConns, err := p.config.MeterConfig.Meter.Int64Counter("postgres.stats.max_open_conns")
 	if err != nil {
 		return err
