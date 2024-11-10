@@ -210,6 +210,17 @@ var maxBulkUpdateArrayLen = 10000
 //
 // Values contains one slice of values per column. (Note that this is unlike BulkInsert, which
 // takes a single slice of interleaved values.)
+//
+// To use this function correctly you need to understand the above statement that "values contains one slice
+// of values per column". This means the number of columns must be the same with the number of first array of
+// values. This is because the function is looking at something like this:
+//
+// column := []string{"one", "two"]
+// values[one] := []any{"val_1", "val_2", "val_3"}
+// values[two] := []any{"val_1", "val_2", "val_3"}
+//
+// As you can see above, the first array represents the index of column, and the second represents the set
+// and index of data.
 func (p *Postgres) BulkUpdate(ctx context.Context, table string, columns, types []string, values [][]any) (err error) {
 	if len(columns) < 2 {
 		return errors.New("need at least two columns")

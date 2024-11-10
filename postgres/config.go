@@ -34,8 +34,10 @@ type ConnectConfig struct {
 	// Host is the host address to connect to the PostgreSQL database. For example, localhost.
 	Host string
 	// Port is the port to connecto to the PostgreSQL database. For example, 5432.
-	Port            string
-	DBName          string
+	Port   string
+	DBName string
+	// SearchPath is the default search path/schema path for PostgreSQL. The search path is being set in the dsn when
+	// connecting to postgresql.
 	SearchPath      string
 	SSLMode         string
 	MaxOpenConns    int

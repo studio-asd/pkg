@@ -64,6 +64,7 @@ func CreateDatabase(ctx context.Context, dsn, name string, recreateIfExists bool
 	if !recreateIfExists {
 		ok, err := isDatabaseExists(ctx, pg, name)
 		if err != nil {
+			fmt.Println("LAH")
 			return err
 		}
 		if ok {

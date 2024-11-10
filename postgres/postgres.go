@@ -73,6 +73,7 @@ func NewConfigFromDSN(dsn string) (ConnectConfig, error) {
 		return ConnectConfig{}, err
 	}
 	return ConnectConfig{
+		Driver:   "pgx",
 		Username: pgDSN.Username,
 		Password: pgDSN.Password,
 		Host:     pgDSN.Host,
@@ -408,6 +409,7 @@ func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc 
 		pgx:        p.pgx,
 		tx:         tx,
 		tracer:     p.tracer,
+		txIso:      iso,
 	}
 	err = txFunc(spanCtx, newPG)
 	if err != nil {
