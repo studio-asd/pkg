@@ -87,7 +87,6 @@ type OtelMetricConfig struct {
 	Disable bool
 	// MeterName is the name of metric meter for otel meter provider.
 	MeterName string
-
 	// Below is a private configuration passed from the srun itself to provide several information
 	// for the open-telemetry.
 	serviceName    string

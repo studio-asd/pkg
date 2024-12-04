@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -147,7 +148,7 @@ func TestGracefulShutdown(t *testing.T) {
 				return nil
 			})
 		})
-		if err != nil {
+		if err != nil && isError(err) {
 			t.Fatal(err)
 		}
 	})
@@ -223,6 +224,9 @@ level=INFO msg="[Service] testing_3: INITIATING" logger_scope=service_runner
 level=INFO msg="[Service] testing_3: INITIATED" logger_scope=service_runner
 level=INFO msg="[Service] testing_3: STARTING" logger_scope=service_runner
 level=INFO msg="[Service] testing_3: RUNNING" logger_scope=service_runner
+level=INFO msg="[Service] testing_1: RUN_EXITED" logger_scope=service_runner
+level=INFO msg="[Service] testing_2: RUN_EXITED" logger_scope=service_runner
+level=INFO msg="[Service] testing_3: RUN_EXITED" logger_scope=service_runner
 level=INFO msg="[Service] testing_3: SHUTTING DOWN" logger_scope=service_runner
 level=INFO msg="[Service] testing_3: STOPPED" logger_scope=service_runner
 level=INFO msg="[Service] testing_2: SHUTTING DOWN" logger_scope=service_runner
@@ -265,7 +269,7 @@ level=INFO msg="[Service] testing_1: STOPPED" logger_scope=service_runner
 		}
 		return nil
 	})
-	if err != nil {
+	if err != nil && isError(err) {
 		t.Fatal(err)
 	}
 
@@ -292,8 +296,15 @@ func TestServiceStateTracker(t *testing.T) {
 		subTests []subTest
 	}{
 		{
-			name:    "check state run-stop-run",
-			service: &serviceDoNothing{},
+			name: "check state run-stop-run",
+			service: &serviceDoNothing{
+				errC: make(chan error, 1),
+				onRun: func(ctx context.Context, sdn *serviceDoNothing) error {
+					// Keep the run to be long enough until ready is invoked.
+					time.Sleep(time.Second * 5)
+					return nil
+				},
+			},
 			subTests: []subTest{
 				{
 					name: "init",
@@ -302,13 +313,21 @@ func TestServiceStateTracker(t *testing.T) {
 				},
 				{
 					name: "try to run",
-					fn:   func(ctx context.Context, svc ServiceRunnerAware) error { return svc.Run(ctx) },
-					err:  nil,
+					fn: func(ctx context.Context, svc ServiceRunnerAware) error {
+						// Run this inside the goroutine so we can expect the next test.
+						go svc.Run(ctx)
+						// Wait for the goroutine to be scheduled.
+						time.Sleep(time.Second)
+						return nil
+					},
+					err: nil,
 				},
 				{
 					name: "try to run again, should got error already running",
-					fn:   func(ctx context.Context, svc ServiceRunnerAware) error { return svc.Run(ctx) },
-					err:  errServiceRunnerAlreadyRunning,
+					fn: func(ctx context.Context, svc ServiceRunnerAware) error {
+						return svc.Run(ctx)
+					},
+					err: errServiceRunnerAlreadyRunning,
 				},
 				{
 					name: "invoke ready",
@@ -337,8 +356,12 @@ func TestServiceStateTracker(t *testing.T) {
 				},
 				{
 					name: "try to run again",
-					fn:   func(ctx context.Context, svc ServiceRunnerAware) error { return svc.Run(ctx) },
-					err:  nil,
+					fn: func(ctx context.Context, svc ServiceRunnerAware) error {
+						go svc.Run(ctx)
+						time.Sleep(time.Second)
+						return nil
+					},
+					err: nil,
 				},
 				{
 					name: "invoke ready again, after stopped",
@@ -353,10 +376,14 @@ func TestServiceStateTracker(t *testing.T) {
 			},
 		},
 		{
-			name: "return constant error when invoking ready",
+			name: "invoking ready but run already returned",
 			service: &serviceDoNothing{
+				errC: make(chan error, 1),
+				onRun: func(ctx context.Context, sdn *serviceDoNothing) error {
+					return nil
+				},
 				onReady: func(ctx context.Context, sdn *serviceDoNothing) error {
-					return errCantCheckReadiness
+					return nil
 				},
 			},
 			subTests: []subTest{
@@ -371,11 +398,11 @@ func TestServiceStateTracker(t *testing.T) {
 					err:  nil,
 				},
 				{
-					name: "return cannot check readiness",
+					name: "ready return nil",
 					fn: func(ctx context.Context, svc ServiceRunnerAware) error {
 						return svc.Ready(ctx)
 					},
-					err: errCantCheckReadiness,
+					err: nil,
 				},
 			},
 		},
@@ -383,6 +410,11 @@ func TestServiceStateTracker(t *testing.T) {
 			name: "ready check nearly exhausted",
 			service: &serviceDoNothing{
 				container: &atomic.Int32{},
+				errC:      make(chan error, 1),
+				onRun: func(ctx context.Context, sdn *serviceDoNothing) error {
+					time.Sleep(time.Second * 3)
+					return nil
+				},
 				onReady: func(ctx context.Context, sdn *serviceDoNothing) error {
 					at := sdn.container.(*atomic.Int32)
 					got := at.Add(1)
@@ -400,8 +432,11 @@ func TestServiceStateTracker(t *testing.T) {
 				},
 				{
 					name: "run",
-					fn:   func(ctx context.Context, svc ServiceRunnerAware) error { return svc.Run(ctx) },
-					err:  nil,
+					fn: func(ctx context.Context, svc ServiceRunnerAware) error {
+						go svc.Run(ctx)
+						return nil
+					},
+					err: nil,
 				},
 				{
 					name: "return nil",
@@ -487,6 +522,10 @@ type serviceDoNothing struct {
 	container any
 	onRun     func(ctx context.Context, sdn *serviceDoNothing) error
 	onReady   func(ctx context.Context, sdn *serviceDoNothing) error
+	errC      chan error
+
+	mu         sync.Mutex
+	cancelFunc context.CancelFunc
 }
 
 func (s *serviceDoNothing) Name() string {
@@ -503,8 +542,20 @@ func (s *serviceDoNothing) Init(ctx Context) error {
 
 func (s *serviceDoNothing) Run(ctx context.Context) error {
 	if s.onRun != nil {
-		if err := s.onRun(ctx, s); err != nil {
+		runCtx, cancel := context.WithCancel(ctx)
+		s.mu.Lock()
+		s.cancelFunc = cancel
+		s.mu.Unlock()
+
+		go func() {
+			s.errC <- s.onRun(runCtx, s)
+		}()
+
+		select {
+		case err := <-s.errC:
 			return err
+		case <-runCtx.Done():
+			return nil
 		}
 	}
 	return nil
@@ -520,6 +571,9 @@ func (s *serviceDoNothing) Ready(ctx context.Context) error {
 }
 
 func (s *serviceDoNothing) Stop(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cancelFunc()
 	return nil
 }
 
@@ -571,6 +625,7 @@ level=INFO msg="[Service] a_service: INITIATED" logger_scope=service_runner
 level=INFO msg="[Service] a_service: STARTING" logger_scope=service_runner
 level=INFO msg="this is a log" logger_scope=a_service
 level=INFO msg="[Service] a_service: RUNNING" logger_scope=service_runner
+level=INFO msg="[Service] a_service: RUN_EXITED" logger_scope=service_runner
 level=INFO msg="[Service] a_service: SHUTTING DOWN" logger_scope=service_runner
 level=INFO msg="[Service] a_service: STOPPED" logger_scope=service_runner
 `
@@ -591,16 +646,22 @@ level=INFO msg="[Service] a_service: STOPPED" logger_scope=service_runner
 				RemoveTime: true,
 			},
 		})
-		s.MustRun(func(ctx context.Context, runner ServiceRunner) error {
+		err := s.Run(func(ctx context.Context, runner ServiceRunner) error {
 			sdn := &serviceDoNothing{
 				name: "a_service",
+				errC: make(chan error, 1),
 				onRun: func(ctx context.Context, sdn *serviceDoNothing) error {
 					sdn.logger.Info("this is a log")
+					// Give time for the runner to invoke Ready() so the log order is deterministic.
+					time.Sleep(time.Second)
 					return nil
 				},
 			}
 			return runner.Register(sdn)
 		})
+		if err != nil && isError(err) {
+			t.Fatal(err)
+		}
 
 		got := buff.String()
 		if diff := cmp.Diff(expectLog, got); diff != "" {

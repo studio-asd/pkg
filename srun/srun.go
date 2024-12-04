@@ -70,6 +70,7 @@ func (s serviceState) String() string {
 		"RUNNING",       // After Ready() is called.
 		"SHUTTING DOWN", // Before Stop() is called.
 		"STOPPED",       // After Stop() is called or initial state of the service.
+		"RUN_EXITED",    // After internal Run() is returned.
 	}[s]
 }
 
@@ -81,6 +82,7 @@ const (
 	serviceStateRunning
 	serviceStateShutdown
 	serviceStateStopped
+	serviceStateRunExited
 )
 
 // Service types defines the type of services inside the service runner.
@@ -99,6 +101,7 @@ var (
 	// errReceivingExitSignal being thrown when the signal.Notify receives a signal of termination/interrupt.
 	errReceivingExitSginal         = errors.New("receiving exit signal")
 	errServiceRunnerAlreadyRunning = errors.New("service runner is already running")
+	errServiceShuttingDown         = errors.New("service is in shutting down state")
 	errGracefulPeriodTimeout       = errors.New("graceful-period timeout")
 	// errRunDeadlineTimeout being thrown when 'SRUN_DEADLINE' is being set and the runner has run beyond the deadline duration.
 	errRunDeadlineTimeout = errors.New("run deadline timeout reached")
@@ -119,6 +122,7 @@ var (
 	// errUnhealthyService is used when we are failed to check the service health for the first time.
 	errUnhealthyService  = errors.New("healthcheck: service is not healthy")
 	errInvalidStateOrder = errors.New("service is not in a desired state")
+	errAllServicesExited = errors.New("all services exited")
 )
 
 // Context holds runner context including all objects that belong to the runner. For example we can pass logger and otel meter
@@ -147,6 +151,8 @@ type ServiceRunnerAware interface {
 	Name() string
 	// Init initialize the service by passing the srun.Context, so the service can use the special context object.
 	Init(Context) error
+	// Run runs the service. The service runner is expecting run to block until run is exited, so it will invoke Run()
+	// inside a goroutine.
 	Run(context.Context) error
 	// Ready returns the status for the service whether it is ready or not. The readiness state of a service
 	// will block another service from running as we want to run them sequentially.
@@ -413,7 +419,7 @@ func (r *Runner) registerDefaultServices(otelTracerProvider, otelMeterProvider *
 // Run runs the run function that register services in the main function.
 //
 // Please NOTE that the run function should not block, otherwise  the runner can't execute other services that registered in the runner.
-func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) (err error) {
+func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) (returnedErr error) {
 	r.logger.Info(fmt.Sprintf("Running program: %s", r.serviceName))
 	var (
 		readyTimeout            = r.config.Timeout.ReadyTimeout
@@ -427,23 +433,23 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 		if v != nil {
 			errRecover, ok := v.(error)
 			if ok {
-				err = errors.Join(err, errRecover)
-				err = errors.Join(err, errPanic)
+				returnedErr = errors.Join(returnedErr, errRecover)
+				returnedErr = errors.Join(returnedErr, errPanic)
 			} else {
-				err = errors.Join(err, fmt.Errorf("%v", v))
-				err = errors.Join(err, errPanic)
+				returnedErr = errors.Join(returnedErr, fmt.Errorf("%v", v))
+				returnedErr = errors.Join(returnedErr, errPanic)
 			}
 			stackTrace = debug.Stack()
 		}
 		// Check if th error is expected or not upon exit. Because we send the cancelled context error
 		// with cause to determine why the program exit.
-		if !isError(err) {
+		if !isError(returnedErr) {
 			return
 		}
 
 		// Wrap the error with additional information of stack trace.
 		if stackTrace != nil {
-			err = fmt.Errorf("%w\n\n%s", err, string(stackTrace))
+			returnedErr = fmt.Errorf("%w\n\n%s", returnedErr, string(stackTrace))
 		}
 	}()
 
@@ -481,8 +487,8 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 		}
 	}()
 
-	err = run(parentCtx, newRegistrar(r))
-	if err != nil {
+	returnedErr = run(parentCtx, newRegistrar(r))
+	if returnedErr != nil {
 		return
 	}
 	// If we don't have any services, then don't bother to run anything at all.
@@ -490,6 +496,155 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 		return nil
 	}
 
+	runErrC := make(chan error, len(r.services))
+	// Start the service with FIFO, as we want to ensure the service at the bottom of the stack will be always
+	// ready to start. For example, this behavior is beneficial when we start http/gRPC server after we are
+	// connected to all dependencies.
+	//
+	// Imagine the services stack looked like this:
+	//	|-------------------|
+	//	|resource-controller| <- run_first
+	//	|    http-server   	|
+	//	|    grpc-server	|
+	//	|-------------------|
+	//
+	// The resource controller will connects all databases and service dependencies first, then start the http-server
+	// and then grpc-server last.
+	for _, service := range r.services {
+		svc := service
+		if ctxSignal.Err() != nil {
+			returnedErr = ctxSignal.Err()
+			return
+		}
+		// Init the service.
+		initCtx, cancel := context.WithTimeout(ctxSignal, r.config.Timeout.InitTimeout)
+		go func() {
+			initContext := Context{
+				Ctx: initCtx,
+				// Assign a new logger from the default logger(we have configured this before), so each logger will have default attributes
+				// called 'logger_scope' to tell the scope of the logger.
+				Logger:         slog.Default().With(slog.String("logger_scope", svc.Name())),
+				Meter:          r.otelMeter,
+				Tracer:         r.otelTracer,
+				HealthNotifier: &HealthcheckNotifier{noop: true},
+			}
+			if r.healthcheckService != nil {
+				initContext.HealthNotifier = r.healthcheckService.notifiers[svc]
+			}
+			err := svc.Init(initContext)
+			runErrC <- err
+		}()
+		select {
+		case <-initCtx.Done():
+			cancel()
+			return errServiceInitTimeout
+		case err := <-runErrC:
+			cancel()
+			if err != nil {
+				return err
+			}
+		}
+		// Run the service.
+		go func(s *ServiceStateTracker) {
+			err := s.Run(ctxSignal)
+			runErrC <- err
+		}(svc)
+
+		// Check whether the service is in ready state or not. We use backoff, because sometimes the goroutines is not scheduled
+		// yet, thus lead to wrong result.
+		readyC := make(chan error, 1)
+		// Create a timeout for service readiness as we don't want to wait for too long for unresponsive service.
+		readyTimeoutCtx, cancelReady := context.WithTimeout(ctxSignal, readyTimeout)
+		defer cancelReady()
+		// Spawn a goroutine to wait for the ready notification. At this stage, there is no guarantee that Run() is not yet returned
+		// so ready will immediately return if Run() already exited.
+		go func() {
+			err := svc.Ready(readyTimeoutCtx)
+			readyC <- err
+			return
+		}()
+
+		// Wait for the service to be ready before starting the next service.
+		select {
+		case <-readyTimeoutCtx.Done():
+			cancelReady()
+			returnedErr = context.Cause(readyTimeoutCtx)
+			returnedErr = errors.Join(returnedErr, errServiceReadyTimeout)
+			return
+		case err := <-readyC:
+			if err != nil {
+				returnedErr = errors.Join(err, context.Cause(readyTimeoutCtx))
+				return
+			}
+		}
+
+		// Don't do any healthcheck if the healthcheck service is disabled.
+		if r.healthcheckService == nil {
+			continue
+		}
+		// Do a firstround of healthcheck after the service is ready as we want to understand the health status of each service.
+		status, err := r.healthcheckService.check(context.Background(), svc)
+		if err != nil {
+			returnedErr = err
+			// TODO: return a healthcheck error
+			return
+		}
+		if status <= HealthStatusUhealthy {
+			returnedErr = fmt.Errorf("%w with name %s. Status: %s", errUnhealthyService, svc.Name(), status)
+			return
+		}
+	}
+
+	var exitCause error
+	var errCounter int
+	// There are several ways that srun can exit:
+	//
+	// 1. Interupt/termination of the program.
+	//    In this case, we will shutdown everything in the defer loop.
+	//
+	// 2. One of the 'service' is exiting with non nil error.
+	//    In this case, we will shutdown everything in the defer loop.
+	//
+	// 3. All services exiting with nil error.
+	//    In this case, the code will touch defer loop, but everything already stopped.
+	//    So we will not wait for all services to shutdown again.
+	for {
+		// If the exitcause is not nil then it means we have break the select statement, so we should just break the loop.
+		if exitCause != nil {
+			break
+		}
+		select {
+		case <-ctxSignal.Done():
+			exitCause = context.Cause(ctxSignal)
+			break
+
+		case err := <-runErrC:
+			errCounter++
+			if err != nil {
+				// If an error is not because an upgrade, add more context that the program exit because an error from a service.
+				if isError(err) {
+					err = fmt.Errorf("%w:%v", errServiceError, err)
+				}
+				ctxSignalCancel(nil)
+				exitCause = err
+				break
+			}
+			// We will ignore services that returned nil error if the number of running services is still
+			// more than the number of returned error. But if there are no services left, then we should
+			// return immediately.
+			//
+			// This allows something like resource controller to exit first while waiting for other services
+			// to be finished or cancelled by the interrupt signal.
+			if errCounter < len(r.services) {
+				continue
+			}
+			ctxSignalCancel(nil)
+			exitCause = errAllServicesExited
+			break
+		}
+	}
+	// Put the exitCause as the returnedErr as any other error shoud be appended to the returnedErr.
+	returnedErr = exitCause
 	// Don't forget to stop all the services to ensure we are not leaking any resources behind.
 	// We put the defer on-top for of triggering the run becauase we want to ensure if something
 	// bad happen in the run function, we will still stop all the services.
@@ -510,166 +665,30 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 	//
 	// We stopped the services inside a goroutine to ensure there are no blockers in the shutdown process
 	// and we will wait until the graceful period timeout.
-	defer func() {
-		doneCh := make(chan struct{})
-		ctxTimeout, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
-		// Invoke a goroutine and stop the services sequentially because we don't want to kill the services randomly.
-		go func() {
-			for i := len(r.services); i > 0; i-- {
-				errStop := r.services[i-1].Stop(ctxTimeout)
-				if errStop != nil {
-					err = errors.Join(err, errStop)
-				}
+	stopErrC := make(chan error)
+	ctxTimeout, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
+	defer cancel()
+	// Invoke a goroutine and stop the services sequentially because we don't want to kill the services randomly.
+	go func() {
+		var err error
+		for i := len(r.services); i > 0; i-- {
+			errStop := r.services[i-1].Stop(ctxTimeout)
+			if errStop != nil {
+				err = errors.Join(err, errStop)
 			}
-			doneCh <- struct{}{}
-		}()
-
-		select {
-		case <-ctxTimeout.Done():
-			err = errors.Join(err, errGracefulPeriodTimeout)
-			break
-		case <-doneCh:
-			break
 		}
-		cancel()
+		stopErrC <- err
 	}()
 
-	errC := make(chan error, len(r.services))
-	// Start the service with FIFO, as we want to ensure the service at the bottom of the stack will be always
-	// ready to start. For example, this behavior is beneficial when we start http/gRPC server after we are
-	// connected to all dependencies.
-	//
-	// Imagine the services stack looked like this:
-	//	|-------------------|
-	//	|resource-controller| <- run_first
-	//	|    http-server   	|
-	//	|    grpc-server	|
-	//	|-------------------|
-	//
-	// The resource controller will connects all databases and service dependencies first, then start the http-server
-	// and then grpc-server last.
-	for _, service := range r.services {
-		svc := service
-		if ctxSignal.Err() != nil {
-			err = ctxSignal.Err()
-			return
-		}
-		// Init the service.
-		initCtx, cancel := context.WithTimeout(ctxSignal, r.config.Timeout.InitTimeout)
-		go func() {
-			initContext := Context{
-				Ctx: initCtx,
-				// Assign a new logger from the default logger(we have configured this before), so each logger will have default attributes
-				// called 'logger_scope' to tell the scope of the logger.
-				Logger:         slog.Default().With(slog.String("logger_scope", svc.Name())),
-				Meter:          r.otelMeter,
-				Tracer:         r.otelTracer,
-				HealthNotifier: &HealthcheckNotifier{noop: true},
-			}
-			if r.healthcheckService != nil {
-				initContext.HealthNotifier = r.healthcheckService.notifiers[svc]
-			}
-			err := svc.Init(initContext)
-			errC <- err
-		}()
-		select {
-		case <-initCtx.Done():
-			cancel()
-			return errServiceInitTimeout
-		case err := <-errC:
-			cancel()
-			if err != nil {
-				return err
-			}
-		}
-		// Run the service.
-		go func(s *ServiceStateTracker) {
-			err := s.Run(ctxSignal)
-			errC <- err
-		}(svc)
-
-		// Check whether the service is in ready state or not. We use backoff, because sometimes the goroutines is not scheduled
-		// yet, thus lead to wrong result.
-		readyC := make(chan error, 1)
-		// Create a timeout for service readiness as we don't want to wait for too long for unresponsive service.
-		readyTimeoutCtx, cancelReady := context.WithTimeout(ctxSignal, readyTimeout)
-		defer cancelReady()
-		// Spawn a goroutine to wait for the ready notification.
-		go func() {
-			err := svc.Ready(readyTimeoutCtx)
-			readyC <- err
-			return
-		}()
-
-		// Wait for the service to be ready before starting the next service.
-		select {
-		case <-readyTimeoutCtx.Done():
-			cancelReady()
-			err = context.Cause(readyTimeoutCtx)
-			err = errors.Join(err, errServiceReadyTimeout)
-			return
-		case err := <-readyC:
-			if err != nil {
-				err = errors.Join(err, context.Cause(readyTimeoutCtx))
-				return err
-			}
-		}
-
-		// Don't do any healthcheck if the healthcheck service is disabled.
-		if r.healthcheckService == nil {
-			continue
-		}
-		// Do a firstround of healthcheck after the service is ready as we want to understand the health status of each service.
-		status, err := r.healthcheckService.check(context.Background(), svc)
+	select {
+	case <-ctxTimeout.Done():
+		returnedErr = errors.Join(returnedErr, errGracefulPeriodTimeout)
+		return
+	case err := <-stopErrC:
 		if err != nil {
-			// TODO: return a healthcheck error
-			return err
+			returnedErr = errors.Join(returnedErr, err)
 		}
-		if status <= HealthStatusUhealthy {
-			return fmt.Errorf("%w with name %s. Status: %s", errUnhealthyService, svc.Name(), status)
-		}
-	}
-
-	var errCounter int
-	// There are several ways that srun can exit:
-	//
-	// 1. Interupt/termination of the program.
-	//    In this case, we will shutdown everything in the defer loop.
-	//
-	// 2. One of the 'service' is exiting with non nil error.
-	//    In this case, we will shutdown everything in the defer loop.
-	//
-	// 3. All services exiting with nil error.
-	//    In this case, the code will touch defer loop, but everything already stopped.
-	//    So we will not wait for all services to shutdown again.
-	for {
-		select {
-		case <-ctxSignal.Done():
-			err = context.Cause(ctxSignal)
-			return
-
-		case err = <-errC:
-			errCounter++
-			if err != nil {
-				// If an error is not because an upgrade, add more context that the program exit because an error from a service.
-				if isError(err) {
-					err = fmt.Errorf("%w:%v", errServiceError, err)
-				}
-				ctxSignalCancel(nil)
-				return
-			}
-			// We will ignore services that returned nil error if the number of running services is still
-			// more than the number of returned error. But if there are no services left, then we should
-			// return immediately.
-			//
-			// This allows something like resource controller to exit first while waiting for other services
-			// to be finished or cancelled by the interrupt signal.
-			if errCounter < len(r.services) {
-				continue
-			}
-			ctxSignalCancel(nil)
-			return
-		}
+		return
 	}
 }
 
@@ -681,8 +700,8 @@ func (r *Runner) MustRun(run func(ctx context.Context, runner ServiceRunner) err
 	exitCode := 0
 	err := r.Run(run)
 	if err != nil {
-		slog.Error(err.Error())
 		if isError(err) {
+			slog.Error(err.Error())
 			exitCode = 1
 		}
 	}
@@ -705,6 +724,7 @@ func isError(err error) bool {
 		errUpgrade,
 		errRunDeadlineTimeout,
 		errReceivingExitSginal,
+		errAllServicesExited,
 		nil,
 	}
 	for _, okError := range okErrors {
@@ -718,9 +738,13 @@ func isError(err error) bool {
 // ServiceStateTracker wraps the actual service type/interface to track the state of the service.
 type ServiceStateTracker struct {
 	ServiceRunnerAware
+	// runErrC is used for Stop() function to wait until run is returned. This is because we are invoking Run()
+	// inside a goroutine and we need to ensure Run() goroutine is really stopped.
+	runErrC chan error
+	runMu   sync.Mutex
 	readyMu sync.Mutex
 	stopMu  sync.Mutex
-	mu      sync.RWMutex
+	stateMu sync.RWMutex
 	state   serviceState
 	logger  *slog.Logger
 	// svcTypes stores the type of services. The types is a slice because we might want to record the
@@ -737,9 +761,9 @@ func newServiceStateTracker(s ServiceRunnerAware, logger *slog.Logger) *ServiceS
 	switch svc := s.(type) {
 	// Need to check whether the type is already service state tracker and assign the correct state and logger.
 	case *ServiceStateTracker:
-		svc.mu.Lock()
+		svc.stateMu.Lock()
 		state := svc.state
-		svc.mu.Unlock()
+		svc.stateMu.Unlock()
 		// This is a bad state and cannot be accepted. If this happen then this surely a bug in the runner.
 		if state != serviceStateStopped {
 			panic("service is not in stopped state when registered")
@@ -747,6 +771,9 @@ func newServiceStateTracker(s ServiceRunnerAware, logger *slog.Logger) *ServiceS
 
 		svc.state = serviceStateStopped
 		svc.logger = logger
+		if svc.runErrC == nil {
+			svc.runErrC = make(chan error, 1)
+		}
 		return svc
 	}
 
@@ -754,6 +781,7 @@ func newServiceStateTracker(s ServiceRunnerAware, logger *slog.Logger) *ServiceS
 		ServiceRunnerAware: s,
 		state:              serviceStateStopped,
 		logger:             logger,
+		runErrC:            make(chan error, 1),
 	}
 }
 
@@ -762,8 +790,8 @@ func (s *ServiceStateTracker) Name() string {
 }
 
 func (s *ServiceStateTracker) State() serviceState {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
 	return s.state
 }
 
@@ -778,15 +806,22 @@ func (s *ServiceStateTracker) Init(ctx Context) error {
 }
 
 func (s *ServiceStateTracker) Run(ctx context.Context) error {
+	// When the service is in shutting down state, we should not allowed the client to run the service.
+	if s.getState() == serviceStateShutdown {
+		return errServiceShuttingDown
+	}
+	// Service must be in initiated state, otherwise throw an error based on the state.
 	if s.getState() != serviceStateInitiated {
 		if s.getState() >= serviceStateStarting && s.getState() <= serviceStateRunning {
 			return errServiceRunnerAlreadyRunning
 		}
 		return fmt.Errorf("[run] %w: expecting %s state but got %s", errInvalidStateOrder, serviceStateInitiated, s.getState())
 	}
-	s.setState(serviceStateStarting)
 
+	s.setState(serviceStateStarting)
 	err := s.ServiceRunnerAware.Run(ctx)
+	s.setState(serviceStateRunExited)
+	s.runErrC <- err
 	return err
 }
 
@@ -794,7 +829,7 @@ func (s *ServiceStateTracker) Ready(ctx context.Context) error {
 	s.readyMu.Lock()
 	defer s.readyMu.Unlock()
 
-	if s.getState() >= serviceStateShutdown {
+	if s.getState() >= serviceStateShutdown && s.getState() <= serviceStateStopped {
 		return errCantCheckReadiness
 	}
 
@@ -806,11 +841,16 @@ func (s *ServiceStateTracker) Ready(ctx context.Context) error {
 		}
 		<-time.After(time.Millisecond * 300)
 	}
-	if s.getState() != serviceStateStarting {
-		if s.getState() == serviceStateRunning {
+	state := s.getState()
+	// We should just return as Run() already exited, and let the runner to invoke Stop() naturally.
+	if state == serviceStateRunExited {
+		return nil
+	}
+	if state != serviceStateStarting {
+		if state == serviceStateRunning {
 			return nil
 		}
-		return fmt.Errorf("[ready] %w: expecting %s state", errInvalidStateOrder, serviceStateStarting)
+		return fmt.Errorf("[ready] %w: expecting %s state but got %s", errInvalidStateOrder, serviceStateStarting, state)
 	}
 
 	// Depends on the service internal state, some service might want to wait for some delay until the service is really ready.
@@ -851,22 +891,39 @@ func (s *ServiceStateTracker) Stop(ctx context.Context) error {
 		return errors.New("[stop] service is in shutting down state")
 	}
 
+	// If the service is already in the state of run_exited or the Run() function had returned, we should not re-attempt
+	// the Stop() as the service already stopped. As the runner assume the service is stopped, then it will exit immediately.
+	if s.getState() == serviceStateRunExited {
+		s.setState(serviceStateShutdown)
+		<-s.runErrC
+		s.setState(serviceStateStopped)
+		return nil
+	}
 	s.setState(serviceStateShutdown)
 	err := s.ServiceRunnerAware.Stop(ctx)
+	if err != nil {
+		return err
+	}
+	// The service is "STOPPED" only if run is returned, the Stop() function only trigger the service to stop the process
+	// and doesn't mean the service is stopped immediately.
+	//
+	// This can be confusing as nothing will send an error value to the channel when Run() is already returned. But the code
+	// won't reach here if service is already stopped as Stop() and Run() is guarded with mutex and state.
+	<-s.runErrC
 	s.setState(serviceStateStopped)
-	return err
+	return nil
 }
 
 func (s *ServiceStateTracker) setState(state serviceState) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 
 	s.state = state
 	s.logger.Info(fmt.Sprintf("[Service] %s: %s", s.Name(), s.state))
 }
 
 func (s *ServiceStateTracker) getState() serviceState {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 	return s.state
 }
