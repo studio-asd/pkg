@@ -891,14 +891,6 @@ func (s *ServiceStateTracker) Stop(ctx context.Context) error {
 		return errors.New("[stop] service is in shutting down state")
 	}
 
-	// If the service is already in the state of run_exited or the Run() function had returned, we should not re-attempt
-	// the Stop() as the service already stopped. As the runner assume the service is stopped, then it will exit immediately.
-	if s.getState() == serviceStateRunExited {
-		s.setState(serviceStateShutdown)
-		<-s.runErrC
-		s.setState(serviceStateStopped)
-		return nil
-	}
 	s.setState(serviceStateShutdown)
 	err := s.ServiceRunnerAware.Stop(ctx)
 	if err != nil {

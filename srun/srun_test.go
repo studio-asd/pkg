@@ -573,7 +573,9 @@ func (s *serviceDoNothing) Ready(ctx context.Context) error {
 func (s *serviceDoNothing) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.cancelFunc()
+	if s.cancelFunc != nil {
+		s.cancelFunc()
+	}
 	return nil
 }
 
