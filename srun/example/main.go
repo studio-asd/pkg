@@ -51,6 +51,8 @@ func run() func(context.Context, srun.ServiceRunner) error {
 		if err != nil {
 			return err
 		}
-		return sr.Register(r)
+		return sr.Register(
+			r,
+		)
 	}
 }

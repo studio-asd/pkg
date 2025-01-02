@@ -56,10 +56,10 @@ func (c *ConnectConfig) validate() error {
 		return errors.New("postgres: password cannot be empty")
 	}
 	if c.Host == "" {
-		return errors.New("postgres: host cannot be empty")
+		c.Host = "127.0.0.1"
 	}
 	if c.Port == "" {
-		return errors.New("postgres: port cannot be empty")
+		c.Port = "5432"
 	}
 	if c.SearchPath == "" {
 		c.SearchPath = "public"

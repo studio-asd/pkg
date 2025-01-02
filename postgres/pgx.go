@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // CopyFromRows use PostgreSQL COPY protocol to inserts data into the database. Overall, COPY is faster than INSERT, and should
@@ -15,6 +17,18 @@ import (
 //
 // Copy protocol documentation: https://www.postgresql.org/docs/current/sql-copy.html#:~:text=COPY%20moves%20data%20between%20PostgreSQL,results%20of%20a%20SELECT%20query.
 func (p *Postgres) CopyFromRows(ctx context.Context, table string, columns []string, values [][]interface{}) (rnum int64, err error) {
+	spanCtx, span := p.tracer.Tracer.Start(
+		ctx,
+		"postgres.pgx.copyFromRows",
+		trace.WithSpanKind(trace.SpanKindInternal),
+	)
+	defer func() {
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
+	}()
+
 	if !p.IsPgx() {
 		err = errors.New("copyFromRows can only be used when using pgx driver")
 		return
@@ -29,7 +43,7 @@ func (p *Postgres) CopyFromRows(ctx context.Context, table string, columns []str
 	}
 
 	rnum, err = p.pgx.CopyFrom(
-		ctx,
+		spanCtx,
 		pgx.Identifier{table},
 		columns,
 		pgx.CopyFromRows(values),

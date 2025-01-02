@@ -115,7 +115,7 @@ type Healthcheck interface {
 // The point of this interface is to allow services to just implement ServiceRunnerAware. The package will automatically detect
 // whether this interface is implemented or not and act accordingly.
 type HealthcheckConsumer interface {
-	ServiceRunnerAware
+	ServiceInitAware
 	// ConsumeHealthcheckNotification consumes all the healthcheck notifications from all services in the subscriptions.
 	// The function provides filter to allow the client to list the services to listen to. The client will skips all the
 	// messages from unrelated services and only pass the matched one to the function.
@@ -173,7 +173,7 @@ type HealthcheckService struct {
 	// be a service that won't consume the notification but they need to send the notification. For example a service that
 	// held database resource might don't have a need to consume healthcheck notification but it need to send the notification
 	// if in any case the database is down.
-	notifiers map[ServiceRunnerAware]*HealthcheckNotifier
+	notifiers map[ServiceInitAware]*HealthcheckNotifier
 	// services is the list of services that need checks.
 	services map[ServiceRunnerAware]Healthcheck
 	// servicesStatus is a map based on service name to track the health status of eaach services.
@@ -194,13 +194,13 @@ func newHealthcheckService(config HealthcheckConfig) *HealthcheckService {
 		config:         config,
 		services:       make(map[ServiceRunnerAware]Healthcheck),
 		servicesStatus: make(map[string]*ServiceHealthStatus),
-		notifiers:      make(map[ServiceRunnerAware]*HealthcheckNotifier),
+		notifiers:      make(map[ServiceInitAware]*HealthcheckNotifier),
 		readyC:         make(chan struct{}, 1),
 	}
 	return hcs
 }
 
-func (h *HealthcheckService) register(svc ServiceRunnerAware) error {
+func (h *HealthcheckService) register(svc ServiceInitAware) error {
 	// Check the type of the service and register recursively if the condition is met. The type switch here is needed
 	// because we want to register the 'real' service type into the healthchecker, and not the wrapper inside the runner.
 	switch real := svc.(type) {
@@ -219,21 +219,25 @@ func (h *HealthcheckService) register(svc ServiceRunnerAware) error {
 	case *ServiceStateTracker:
 		// ServiceStateTracker is the wrapper type inside the runner, so we should not use the type to register it to the healthchecker.
 		// Instead, recursively register it to the HealthcheckService to register the real service.
-		return h.register(real.ServiceRunnerAware)
-	}
-
-	hcf := &HealthcheckNotifier{
-		serviceName: svc.Name(),
-		noop:        !h.config.Enabled,
-		notifyC:     h.notifC,
+		return h.register(real.ServiceInitAware)
 	}
 
 	// Don't build or track anything else if the healthcheck is disabled.
 	if h.config.Enabled {
-		hc, ok := svc.(Healthcheck)
+		sra, ok := svc.(ServiceRunnerAware)
+		// If the type of service is not ServiceRunnerAware then it doesn't makes sense to track the health via Healthcheck service. The init services
+		// only want to init the service via Context and doesn't care about the state beyond that.
 		if ok {
-			h.services[svc] = hc
-			h.servicesStatus[svc.Name()] = &ServiceHealthStatus{status: HealthStatusStopped}
+			hc, ok := svc.(Healthcheck)
+			if ok {
+				h.services[sra] = hc
+				h.servicesStatus[svc.Name()] = &ServiceHealthStatus{status: HealthStatusStopped}
+			}
+			h.notifiers[svc] = &HealthcheckNotifier{
+				serviceName: svc.Name(),
+				noop:        !h.config.Enabled,
+				notifyC:     h.notifC,
+			}
 		}
 		hcc, ok := svc.(HealthcheckConsumer)
 		if ok {
@@ -242,7 +246,6 @@ func (h *HealthcheckService) register(svc ServiceRunnerAware) error {
 			h.broadcastC = append(h.broadcastC, notifC)
 		}
 	}
-	h.notifiers[svc] = hcf
 	return nil
 }
 

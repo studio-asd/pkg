@@ -41,6 +41,9 @@ func TestHealthcheckRegister(t *testing.T) {
 		},
 		{
 			name: "concurrent service",
+			config: HealthcheckConfig{
+				Enabled: true,
+			},
 			services: func() []ServiceRunnerAware {
 				lrt1, _ := NewLongRunningTask("test-lrt-1", func(ctx Context) error { return nil })
 				lrt2, _ := NewLongRunningTask("test-lrt-2", func(ctx Context) error { return nil })
@@ -56,7 +59,7 @@ func TestHealthcheckRegister(t *testing.T) {
 				cs := services[0].(*ConcurrentServices)
 				hcs := newHealthcheckService(config)
 				for _, svc := range cs.services {
-					hcs.notifiers[svc.ServiceRunnerAware] = &HealthcheckNotifier{
+					hcs.notifiers[svc.ServiceInitAware] = &HealthcheckNotifier{
 						serviceName: svc.Name(),
 						noop:        !config.Enabled,
 						notifyC:     hcs.notifC,

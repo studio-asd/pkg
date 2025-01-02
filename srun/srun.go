@@ -136,8 +136,19 @@ type Context struct {
 	// You need to pass/inject the meter object to another function/struct to use this meter.
 	Meter  metric.Meter
 	Tracer trace.Tracer
-	// HealthNotifier is the healthcheck notifier
+	// HealthNotifier is the healthcheck notifier to notify the health check service about the current status of the service.
+	//
+	// Please NOTE that the notifier will always be nil for ServiceInitAware as we don't track the state of init aware service thus
+	// letting them to blast notification doesn't seems meaningful.
 	HealthNotifier *HealthcheckNotifier
+}
+
+// ServiceInitAware interface defines a service that aware it can be Init-ed automatically by the srun.
+type ServiceInitAware interface {
+	// Name returns the name of the service.
+	Name() string
+	// Init initialize the service by passing the srun.Context, so the service can use the special context object.
+	Init(Context) error
 }
 
 // ServiceRunnerAware interface defines that an object is aware that it needs to comply with the service runner
@@ -147,10 +158,7 @@ type Context struct {
 // The context is being passed as a struct value(without pointer) because it's not intended to be passed to any chield object
 // or function. You can pass the things that you need instead the whole context.
 type ServiceRunnerAware interface {
-	// Name returns the name of the service.
-	Name() string
-	// Init initialize the service by passing the srun.Context, so the service can use the special context object.
-	Init(Context) error
+	ServiceInitAware
 	// Run runs the service. The service runner is expecting run to block until run is exited, so it will invoke Run()
 	// inside a goroutine.
 	Run(context.Context) error
@@ -737,7 +745,7 @@ func isError(err error) bool {
 
 // ServiceStateTracker wraps the actual service type/interface to track the state of the service.
 type ServiceStateTracker struct {
-	ServiceRunnerAware
+	ServiceInitAware
 	// runErrC is used for Stop() function to wait until run is returned. This is because we are invoking Run()
 	// inside a goroutine and we need to ensure Run() goroutine is really stopped.
 	runErrC chan error
@@ -757,7 +765,7 @@ type ServiceStateTracker struct {
 	svcTypes []int
 }
 
-func newServiceStateTracker(s ServiceRunnerAware, logger *slog.Logger) *ServiceStateTracker {
+func newServiceStateTracker(s ServiceInitAware, logger *slog.Logger) *ServiceStateTracker {
 	switch svc := s.(type) {
 	// Need to check whether the type is already service state tracker and assign the correct state and logger.
 	case *ServiceStateTracker:
@@ -778,15 +786,15 @@ func newServiceStateTracker(s ServiceRunnerAware, logger *slog.Logger) *ServiceS
 	}
 
 	return &ServiceStateTracker{
-		ServiceRunnerAware: s,
-		state:              serviceStateStopped,
-		logger:             logger,
-		runErrC:            make(chan error, 1),
+		ServiceInitAware: s,
+		state:            serviceStateStopped,
+		logger:           logger,
+		runErrC:          make(chan error, 1),
 	}
 }
 
 func (s *ServiceStateTracker) Name() string {
-	return s.ServiceRunnerAware.Name()
+	return s.ServiceInitAware.Name()
 }
 
 func (s *ServiceStateTracker) State() serviceState {
@@ -797,7 +805,7 @@ func (s *ServiceStateTracker) State() serviceState {
 
 func (s *ServiceStateTracker) Init(ctx Context) error {
 	s.setState(serviceStateInitiating)
-	err := s.ServiceRunnerAware.Init(ctx)
+	err := s.ServiceInitAware.Init(ctx)
 	if err != nil {
 		return err
 	}
@@ -806,6 +814,10 @@ func (s *ServiceStateTracker) Init(ctx Context) error {
 }
 
 func (s *ServiceStateTracker) Run(ctx context.Context) error {
+	sra, ok := s.ServiceInitAware.(ServiceRunnerAware)
+	if !ok {
+		panic(fmt.Sprintf("service %s is not a runner aware service", s.ServiceInitAware.Name()))
+	}
 	// When the service is in shutting down state, we should not allowed the client to run the service.
 	if s.getState() == serviceStateShutdown {
 		return errServiceShuttingDown
@@ -819,13 +831,18 @@ func (s *ServiceStateTracker) Run(ctx context.Context) error {
 	}
 
 	s.setState(serviceStateStarting)
-	err := s.ServiceRunnerAware.Run(ctx)
+	err := sra.Run(ctx)
 	s.setState(serviceStateRunExited)
 	s.runErrC <- err
 	return err
 }
 
 func (s *ServiceStateTracker) Ready(ctx context.Context) error {
+	sra, ok := s.ServiceInitAware.(ServiceRunnerAware)
+	if !ok {
+		panic(fmt.Sprintf("service %s is not a runner aware service", s.ServiceInitAware.Name()))
+	}
+
 	s.readyMu.Lock()
 	defer s.readyMu.Unlock()
 
@@ -862,7 +879,7 @@ func (s *ServiceStateTracker) Ready(ctx context.Context) error {
 	// might haven't changed.
 	var readyErr error
 	for i := 0; i < 3; i++ {
-		readyErr = s.ServiceRunnerAware.Ready(ctx)
+		readyErr = sra.Ready(ctx)
 		if readyErr == nil {
 			break
 		}
@@ -881,6 +898,11 @@ func (s *ServiceStateTracker) Ready(ctx context.Context) error {
 // Stop overrides the ServiceRunnerAware stop to ensure we tracked the state of the service
 // inside the tracker object.
 func (s *ServiceStateTracker) Stop(ctx context.Context) error {
+	sra, ok := s.ServiceInitAware.(ServiceRunnerAware)
+	if !ok {
+		panic(fmt.Sprintf("service %s is not a runner aware service", s.ServiceInitAware.Name()))
+	}
+
 	s.stopMu.Lock()
 	defer s.stopMu.Unlock()
 
@@ -892,7 +914,7 @@ func (s *ServiceStateTracker) Stop(ctx context.Context) error {
 	}
 
 	s.setState(serviceStateShutdown)
-	err := s.ServiceRunnerAware.Stop(ctx)
+	err := sra.Stop(ctx)
 	if err != nil {
 		return err
 	}
