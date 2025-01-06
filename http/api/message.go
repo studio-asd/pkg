@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 
-	"github.com/albertwidi/pkg/instrumentation"
+	"github.com/studio-asd/pkg/instrumentation"
 )
 
 var _ Message = (*I18nMessage)(nil)

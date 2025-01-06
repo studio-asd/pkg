@@ -13,7 +13,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/albertwidi/pkg/http/requestbuilder"
+	"github.com/studio-asd/pkg/http/requestbuilder"
 )
 
 func TestSetPathParamsValue(t *testing.T) {

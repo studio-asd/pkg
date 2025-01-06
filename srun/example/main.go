@@ -6,8 +6,8 @@ import (
 	"flag"
 	"log/slog"
 
-	"github.com/albertwidi/pkg/resources"
-	"github.com/albertwidi/pkg/srun"
+	"github.com/studio-asd/pkg/resources"
+	"github.com/studio-asd/pkg/srun"
 )
 
 type Config struct {

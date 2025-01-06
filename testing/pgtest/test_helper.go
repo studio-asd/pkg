@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/albertwidi/pkg/postgres"
+	"github.com/studio-asd/pkg/postgres"
 )
 
 type TestHelper[V any] struct {

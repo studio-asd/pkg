@@ -1,4 +1,4 @@
-module github.com/albertwidi/pkg
+module github.com/studio-asd/pkg
 
 go 1.22.0
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/albertwidi/pkg/srun"
+	"github.com/studio-asd/pkg/srun"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )

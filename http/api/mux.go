@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/albertwidi/pkg/http/mux"
+	"github.com/studio-asd/pkg/http/mux"
 )
 
 type HandlerFunc func(w http.ResponseWriter, r *http.Request) error

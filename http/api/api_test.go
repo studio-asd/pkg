@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/albertwidi/pkg/http/requestbuilder"
+	"github.com/studio-asd/pkg/http/requestbuilder"
 )
 
 // func TestSome(t *testing.T) {

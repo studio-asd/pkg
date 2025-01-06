@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/albertwidi/pkg/srun"
+	"github.com/studio-asd/pkg/srun"
 )
 
 func main() {

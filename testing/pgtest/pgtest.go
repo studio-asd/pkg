@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/albertwidi/pkg/postgres"
+	"github.com/studio-asd/pkg/postgres"
 )
 
 //go:embed  clone_schema.sql

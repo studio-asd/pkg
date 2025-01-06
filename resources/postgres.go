@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/albertwidi/pkg/postgres"
+	"github.com/studio-asd/pkg/postgres"
 )
 
 var (

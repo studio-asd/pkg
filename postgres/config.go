@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/albertwidi/pkg/instrumentation"
+	"github.com/studio-asd/pkg/instrumentation"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	meternoop "go.opentelemetry.io/otel/metric/noop"
