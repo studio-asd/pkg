@@ -43,10 +43,13 @@ func checkTesting() {
 //
 // WARNING: Please use this function carefully as by default, this will automatically drops the database if the database is exists.
 // Please don't use this function out fo the test code. To not drop the database, PGTEST_SKIP_DROP environment variable need to be set.
-func CreateDatabase(ctx context.Context, dsn, name string, recreateIfExists bool) error {
+func CreateDatabase(ctx context.Context, dsn string, recreateIfExists bool) error {
 	pgDSN, err := postgres.ParseDSN(dsn)
 	if err != nil {
 		return err
+	}
+	if pgDSN.DatabaseName == "" {
+		return errors.New("pg_test: database name cannot be empty inside the data source name")
 	}
 	pg, err := postgres.Connect(ctx, postgres.ConnectConfig{
 		Driver:   "pgx",
@@ -62,9 +65,8 @@ func CreateDatabase(ctx context.Context, dsn, name string, recreateIfExists bool
 	// recreateIfExists forcefully create the database if the database is already exists, otherwise it will just ignore the
 	// fact that the database is exists and continue.
 	if !recreateIfExists {
-		ok, err := isDatabaseExists(ctx, pg, name)
+		ok, err := isDatabaseExists(ctx, pg, pgDSN.DatabaseName)
 		if err != nil {
-			fmt.Println("LAH")
 			return err
 		}
 		if ok {
@@ -72,7 +74,7 @@ func CreateDatabase(ctx context.Context, dsn, name string, recreateIfExists bool
 		}
 	}
 
-	query := fmt.Sprintf("CREATE DATABASE %s", name)
+	query := fmt.Sprintf("CREATE DATABASE %s", pgDSN.DatabaseName)
 	_, err = pg.Exec(ctx, query)
 	if err != nil && err != context.Canceled {
 		// Skip to drop the database because we might don't want to drop the database for the whole test.
@@ -80,7 +82,7 @@ func CreateDatabase(ctx context.Context, dsn, name string, recreateIfExists bool
 			return nil
 		}
 		// If we got an error it might be because the database is still exist.
-		errDrop := DropDatabase(ctx, pg, name)
+		errDrop := dropDatabase(ctx, pg, pgDSN.DatabaseName)
 		if errDrop != nil {
 			return errors.Join(err, errDrop)
 		}
@@ -92,7 +94,7 @@ func CreateDatabase(ctx context.Context, dsn, name string, recreateIfExists bool
 	}
 
 	newConnConfig := pg.Config()
-	newConnConfig.DBName = name
+	newConnConfig.DBName = pgDSN.DatabaseName
 	newConn, err := postgres.Connect(ctx, newConnConfig)
 	if err != nil {
 		return err
@@ -111,7 +113,29 @@ func CreateDatabase(ctx context.Context, dsn, name string, recreateIfExists bool
 	return nil
 }
 
-func DropDatabase(ctx context.Context, pg *postgres.Postgres, name string) error {
+func DropDatabase(ctx context.Context, dsn string) error {
+	pgDSN, err := postgres.ParseDSN(dsn)
+	if err != nil {
+		return err
+	}
+	if pgDSN.DatabaseName == "" {
+		return errors.New("pg_test: database name is required in the data source name")
+	}
+	dbName := pgDSN.DatabaseName
+	pgDSN.DatabaseName = ""
+	config, err := pgDSN.BuildConfig()
+	if err != nil {
+		return err
+	}
+	pg, err := postgres.Connect(ctx, config)
+	if err != nil {
+		return err
+	}
+	defer pg.Close()
+	return dropDatabase(ctx, pg, dbName)
+}
+
+func dropDatabase(ctx context.Context, pg *postgres.Postgres, name string) error {
 	query := fmt.Sprintf("DROP DATABASE IF EXISTS %s", name)
 	_, err := pg.Exec(ctx, query)
 	if err != nil {

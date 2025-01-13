@@ -105,12 +105,16 @@ func (c *ConnectConfig) validate() error {
 //
 //	For example: postgres://username:password@localhost:5432/mydb?sslmode=false.
 func (c *ConnectConfig) DSN() (url string, dsn DSN, err error) {
-	url = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s", c.Username, c.Password, c.Host, c.Port, c.DBName, c.SSLMode)
+	url = buildPostgresURL(c.Username, c.Password, c.Host, c.Port, c.DBName, c.SSLMode)
 	if c.SearchPath != "" {
 		url = url + "&search_path=" + c.SearchPath
 	}
 	dsn, err = ParseDSN(url)
 	return
+}
+
+func buildPostgresURL(username, password, host, port, dbName, sslMode string) string {
+	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s", username, password, host, port, dbName, sslMode)
 }
 
 type TracerConfig struct {

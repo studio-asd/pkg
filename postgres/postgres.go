@@ -72,14 +72,16 @@ func NewConfigFromDSN(dsn string) (ConnectConfig, error) {
 	if err != nil {
 		return ConnectConfig{}, err
 	}
-	return ConnectConfig{
+	config := ConnectConfig{
 		Driver:   "pgx",
+		DBName:   pgDSN.DatabaseName,
 		Username: pgDSN.Username,
 		Password: pgDSN.Password,
 		Host:     pgDSN.Host,
 		Port:     pgDSN.Port,
 		SSLMode:  pgDSN.SSLMode,
-	}, nil
+	}
+	return config, config.validate()
 }
 
 // Connect returns connected Postgres object.

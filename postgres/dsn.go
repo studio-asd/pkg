@@ -56,6 +56,22 @@ type DSN struct {
 	ApplicationName string
 }
 
+func (d DSN) URL() string {
+	return buildPostgresURL(d.Username, d.Password, d.Host, d.Port, d.DatabaseName, d.SSLMode)
+}
+
+func (d DSN) BuildConfig() (ConnectConfig, error) {
+	config := ConnectConfig{
+		Driver:   "pgx",
+		Username: d.Username,
+		Password: d.Password,
+		Host:     d.Host,
+		Port:     d.Port,
+		SSLMode:  d.SSLMode,
+	}
+	return config, config.validate()
+}
+
 // ParseDSN parses a postgres-type dsn into a map
 func ParseDSN(dsn string) (DSN, error) {
 	var err error

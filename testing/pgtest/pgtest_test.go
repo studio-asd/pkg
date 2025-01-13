@@ -28,8 +28,8 @@ CREATE TABLE IF NOT EXISTS testing (
 )
 
 func TestMain(m *testing.M) {
-	dsn := "postgres://postgres:postgres@localhost:5432/"
-	if err := CreateDatabase(context.Background(), dsn, dbName, true); err != nil {
+	dsn := "postgres://postgres:postgres@localhost:5432/" + dbName
+	if err := CreateDatabase(context.Background(), dsn, true); err != nil {
 		log.Fatal(err)
 	}
 
