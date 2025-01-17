@@ -101,12 +101,40 @@ func CreateDatabase(ctx context.Context, dsn string, recreateIfExists bool) erro
 	}
 	defer newConn.Close()
 
+	return createCloneSchemaFunc(ctx, newConn)
+}
+
+func CreateCloneSchemaFunc(ctx context.Context, dsn string) error {
+	config, err := postgres.NewConfigFromDSN(dsn)
+	if err != nil {
+		return err
+	}
+	conn, err := postgres.Connect(ctx, config)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return createCloneSchemaFunc(ctx, conn)
+}
+
+func createCloneSchemaFunc(ctx context.Context, conn *postgres.Postgres) error {
+	var exists bool
+	// Check whether the clone schema function is already exists.
+	query := "SELECT EXISTS(SELECT * FROM pg_proc WHERE proname = 'clone_schema');"
+	row := conn.QueryRow(ctx, query)
+	if err := row.Scan(&exists); err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+
 	// Create the clone schema function using embedded cloneSQL.
 	out, err := cloneSQL.ReadFile("clone_schema.sql")
 	if err != nil {
 		return err
 	}
-	_, err = newConn.Exec(ctx, string(out))
+	_, err = conn.Exec(ctx, string(out))
 	if err != nil {
 		return err
 	}
