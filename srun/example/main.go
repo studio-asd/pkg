@@ -52,7 +52,7 @@ func run() func(context.Context, srun.ServiceRunner) error {
 			return err
 		}
 		return sr.Register(
-			r,
+			srun.RegisterRunnerAwareServices(r),
 		)
 	}
 }

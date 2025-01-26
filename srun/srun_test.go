@@ -20,6 +20,51 @@ import (
 
 var _ ServiceRunnerAware = (*serviceDoNothing)(nil)
 
+func TestRegistrar(t *testing.T) {
+	t.Parallel()
+	t.Run("two different reigstrar", func(t *testing.T) {
+		t.Parallel()
+
+		sdo1 := &serviceDoNothing{
+			name: "sdo1",
+		}
+		sdo2 := &serviceDoNothing{
+			name: "sdo2",
+		}
+
+		r := newRegistrar(New(Config{
+			Name: "testing",
+		}))
+		if err := r.Register(
+			RegisterInitAwareServices(sdo1),
+			RegisterRunnerAwareServices(sdo2),
+		); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("two identical registrar", func(t *testing.T) {
+		t.Parallel()
+
+		sdo1 := &serviceDoNothing{
+			name: "sdo1",
+		}
+		sdo2 := &serviceDoNothing{
+			name: "sdo2",
+		}
+
+		r := newRegistrar(New(Config{
+			Name: "testing",
+		}))
+		if err := r.Register(
+			RegisterInitAwareServices(sdo1),
+			RegisterInitAwareServices(sdo2),
+		); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
 // TestRunReturn runs sequentially because we use t.Setenv which cannot be run in parallel.
 func TestRunReturn(t *testing.T) {
 	errReturn := errors.New("some error")
@@ -177,7 +222,9 @@ func TestGracefulShutdown(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			return runner.Register(lrt2, lrt1)
+			return runner.Register(
+				RegisterRunnerAwareServices(lrt2, lrt1),
+			)
 		})
 		if !errors.Is(err, errGracefulPeriodTimeout) {
 			t.Fatalf("expecting error %v but got %v", errGracefulPeriodTimeout, err)
@@ -658,7 +705,9 @@ level=INFO msg="[Service] a_service: STOPPED" logger_scope=service_runner
 					return nil
 				},
 			}
-			return runner.Register(sdn)
+			return runner.Register(
+				RegisterRunnerAwareServices(sdn),
+			)
 		})
 		if err != nil && isError(err) {
 			t.Fatal(err)

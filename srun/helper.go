@@ -319,5 +319,7 @@ func Serve(name string, runner ServiceRunner, fn func(ctx Context) error) error 
 	if err != nil {
 		return err
 	}
-	return runner.Register(lrt)
+	return runner.Register(
+		RegisterRunnerAwareServices(lrt),
+	)
 }

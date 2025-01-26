@@ -38,6 +38,8 @@ func run() func(context.Context, srun.ServiceRunner) error {
 		if err != nil {
 			return err
 		}
-		return sr.Register(lrt)
+		return sr.Register(
+			srun.RegisterRunnerAwareServices(lrt),
+		)
 	}
 }

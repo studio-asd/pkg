@@ -202,13 +202,18 @@ type AdminItf interface {
 	SetReadinessFunc(func() error)
 }
 
+type ServiceRegistrar interface {
+	name() string
+	services() []Service
+}
+
 // ServiceRunner interface is a special type of interface that implemented by its own package to minimize the
 // API surface for the users. We don't want to expose Run() method, so we need to use an interface.
 //
 // Please NOTE that this is a rare case where we want to use the concrete type in this package to implement the
 // interface for the reason above. Usually the implementor of the interface should belong to the other/implementation package.
 type ServiceRunner interface {
-	Register(services ...Service) error
+	Register(services ...ServiceRegistrar) error
 	Context() Context
 	Admin() AdminItf
 }
@@ -220,8 +225,13 @@ type Registrar struct {
 }
 
 // Register calls internal runner register function to register services to the runner.
-func (r *Registrar) Register(services ...Service) error {
-	return r.runner.register(services...)
+func (r *Registrar) Register(regs ...ServiceRegistrar) error {
+	for _, svcreg := range regs {
+		if err := r.runner.register(svcreg.services()...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Context returns the runner context given to the runner.
