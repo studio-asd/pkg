@@ -59,7 +59,7 @@ func TestHealthcheckRegister(t *testing.T) {
 				cs := services[0].(*ConcurrentServices)
 				hcs := newHealthcheckService(config)
 				for _, svc := range cs.services {
-					hcs.notifiers[svc.ServiceInitAware] = &HealthcheckNotifier{
+					hcs.notifiers[svc.Service] = &HealthcheckNotifier{
 						serviceName: svc.Name(),
 						noop:        !config.Enabled,
 						notifyC:     hcs.notifC,

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -454,7 +453,7 @@ func TestServiceStateTracker(t *testing.T) {
 			t.Parallel()
 			tracker := newServiceStateTracker(test.service, slog.Default())
 			for _, st := range test.subTests {
-				t.Log(fmt.Sprintf("%s/%s", t.Name(), strings.ReplaceAll(st.name, " ", "_")))
+				t.Logf("%s/%s", t.Name(), strings.ReplaceAll(st.name, " ", "_"))
 				if err := st.fn(context.Background(), tracker); !errors.Is(err, st.err) {
 					t.Fatalf("expecting error %v but got %v", st.err, err)
 				}

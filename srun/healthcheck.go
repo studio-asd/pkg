@@ -173,7 +173,7 @@ type HealthcheckService struct {
 	// be a service that won't consume the notification but they need to send the notification. For example a service that
 	// held database resource might don't have a need to consume healthcheck notification but it need to send the notification
 	// if in any case the database is down.
-	notifiers map[ServiceInitAware]*HealthcheckNotifier
+	notifiers map[Service]*HealthcheckNotifier
 	// services is the list of services that need checks.
 	services map[ServiceRunnerAware]Healthcheck
 	// servicesStatus is a map based on service name to track the health status of eaach services.
@@ -194,13 +194,13 @@ func newHealthcheckService(config HealthcheckConfig) *HealthcheckService {
 		config:         config,
 		services:       make(map[ServiceRunnerAware]Healthcheck),
 		servicesStatus: make(map[string]*ServiceHealthStatus),
-		notifiers:      make(map[ServiceInitAware]*HealthcheckNotifier),
+		notifiers:      make(map[Service]*HealthcheckNotifier),
 		readyC:         make(chan struct{}, 1),
 	}
 	return hcs
 }
 
-func (h *HealthcheckService) register(svc ServiceInitAware) error {
+func (h *HealthcheckService) register(svc Service) error {
 	// Check the type of the service and register recursively if the condition is met. The type switch here is needed
 	// because we want to register the 'real' service type into the healthchecker, and not the wrapper inside the runner.
 	switch real := svc.(type) {
@@ -219,7 +219,7 @@ func (h *HealthcheckService) register(svc ServiceInitAware) error {
 	case *ServiceStateTracker:
 		// ServiceStateTracker is the wrapper type inside the runner, so we should not use the type to register it to the healthchecker.
 		// Instead, recursively register it to the HealthcheckService to register the real service.
-		return h.register(real.ServiceInitAware)
+		return h.register(real.Service)
 	}
 
 	// Don't build or track anything else if the healthcheck is disabled.

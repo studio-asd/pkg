@@ -58,6 +58,7 @@ func newConcurrentServices(runnerLogger *slog.Logger, services ...ServiceRunnerA
 	return csvc, err
 }
 
+// Register registers the runner aware services as we don't need the init aware services to be registered/running concurrently.
 func (c *ConcurrentServices) Register(services ...ServiceRunnerAware) error {
 	for _, svc := range services {
 		if _, ok := svc.(*ServiceStateTracker); ok {

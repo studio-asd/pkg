@@ -44,6 +44,8 @@ func checkTesting() {
 // WARNING: Please use this function carefully as by default, this will automatically drops the database if the database is exists.
 // Please don't use this function out fo the test code. To not drop the database, PGTEST_SKIP_DROP environment variable need to be set.
 func CreateDatabase(ctx context.Context, dsn string, recreateIfExists bool) error {
+	checkTesting()
+
 	pgDSN, err := postgres.ParseDSN(dsn)
 	if err != nil {
 		return err
@@ -105,6 +107,8 @@ func CreateDatabase(ctx context.Context, dsn string, recreateIfExists bool) erro
 }
 
 func CreateCloneSchemaFunc(ctx context.Context, dsn string) error {
+	checkTesting()
+
 	config, err := postgres.NewConfigFromDSN(dsn)
 	if err != nil {
 		return err
@@ -142,6 +146,8 @@ func createCloneSchemaFunc(ctx context.Context, conn *postgres.Postgres) error {
 }
 
 func DropDatabase(ctx context.Context, dsn string) error {
+	checkTesting()
+
 	pgDSN, err := postgres.ParseDSN(dsn)
 	if err != nil {
 		return err
