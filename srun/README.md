@@ -16,15 +16,15 @@ You can look into the example [here](./example/main.go).
 
 1. Graceful Shutdown
 
-   The service runner ensure a program to be shutdown gracefuly and give some mechanism for the user to wait until all requests are being taken care by the program before shutdown.
+   The service runner let a program to be shutdown gracefuly and give some mechanism for the user to wait until all requests are being taken care by the program before shutdown.
 
    While the runner helps to ensure the program to exit gracefully, the user still need to be aware of what resource/service that runner will close first. To understand more about this, please read more on how to use the runner.
 
-1. Properly Close/Release All Resources
+1. Help To Properly Close/Release All Resources
 
    When we create a Go program, for example a web service, we usually opens a lot of connections and resources to interact with databases and other services or protocols. But, sometimes all these resources are not being properly closed/released when the program stops. This can cause some problems as sometimes it leaves some resource to be leaked.
 
-   Runner wants to solve this problem by properly releasing all resources when program stops.
+   Runner wants to help the user to solve this problem by properly releasing all resources when program stops.
 
 1. Self Upgrade
 
@@ -42,6 +42,32 @@ You can look into the example [here](./example/main.go).
    - Exposing `/health` for health-checks. This endpoint can be used by platform like `Kubernetes` or `Consul` to check whether the application is up and running.
    - Exposing `/ready` for ready-checks. Some platform like `Kubernetes` usually use this endpoint to check whether they can start delivering traffic to the service or not.
    - Exposing `/debug/**` for profiling.
+
+1. Pre-defined Flags
+
+   Runner adds some pre-defined flags for the user so the user doesn't have to add the same flags manually in their program. The flags are:
+
+   1. Config[`config`]
+
+      The `--config` flag is a `string` flag that will be used to define configuration path for the program.
+
+      For example:
+
+      ```bash
+      ./program --config=some_config.yaml
+      ```
+
+   2. Feature Flags[`feature.eanble`]
+
+      The `--feature.enable` flag is a `[]string` flag that will be used to define the feature that enabled by the program.
+
+      For example:
+
+      ```bash
+      ./program --feature.enable=feature_1 --feature.enable=feature_2
+      ```
+
+      The feature flag is automatically monitored via `otel` metrics named `srun-feature-flags` using a `guage` meter.
 
 ## Understanding Runner
 
@@ -194,6 +220,8 @@ Service runner provides several default services to help the user running a Go p
    Usually a web service/server opens a different port to serve administrational endpoints. We want to provide similar things so user can use the server to do things like profiling(via pprof) and healthcheck.
 
 ## Healthcheck
+
+> This feature is experimental and not enabled by default.
 
 The service runner provides healthcheck to all services so we are able to indentify all the services statuses at one time. It provides `active` and `passive` healthcheck and allows services to consumes the check notifications.
 

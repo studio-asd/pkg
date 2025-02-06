@@ -141,6 +141,7 @@ type Context struct {
 	// Please NOTE that the notifier will always be nil for ServiceInitAware as we don't track the state of init aware service thus
 	// letting them to blast notification doesn't seems meaningful.
 	HealthNotifier *HealthcheckNotifier
+	Flags          *Flags
 }
 
 type Service interface {
@@ -287,6 +288,9 @@ type Runner struct {
 	otelMeter metric.Meter
 	// healthcheckService provide healthchecks for all services and multiplex the check notification.
 	healthcheckService *HealthcheckService
+
+	// flags store the command line flags via flag.FlagSet.
+	flags *Flags
 }
 
 // Error is a helper function that returns functions that satisfy srun.Run. The helper function can be used to easily wrap an error when
@@ -347,6 +351,20 @@ func New(config Config) *Runner {
 		panic(err)
 	}
 
+	f := newFlags()
+	// Slice the args after first argument as the first argument is usually the program name.
+	if err := f.Parse(os.Args[1:]...); err != nil {
+		panic(err)
+	}
+	// Record the gauge of feature flags as we need to monitor the number of the flags to ensure the flags
+	// is not exceeding some limit. Some of the feature flag is a debt, and we need to pay the debt before
+	// adding more.
+	gauge, err := meter.Int64Gauge("srun-feature-flags")
+	if err != nil {
+		panic(err)
+	}
+	gauge.Record(ctx, int64(len(f.featureFlags)))
+
 	r := &Runner{
 		serviceName: config.Name,
 		config:      conf,
@@ -357,6 +375,7 @@ func New(config Config) *Runner {
 		upgrader:   upg,
 		otelMeter:  meter,
 		otelTracer: tracer,
+		flags:      f,
 	}
 	if err := r.registerDefaultServices(tracerLrt, meterLrt); err != nil {
 		panic(err)
@@ -556,6 +575,7 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 				Meter:          r.otelMeter,
 				Tracer:         r.otelTracer,
 				HealthNotifier: &HealthcheckNotifier{noop: true},
+				Flags:          r.flags,
 			}
 			if r.healthcheckService != nil {
 				initContext.HealthNotifier = r.healthcheckService.notifiers[svc]
