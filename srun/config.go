@@ -49,6 +49,10 @@ func (c *Config) Validate() error {
 		c.Healthcheck.Timeout = healthcheckDefaultTimeout
 	}
 
+	if err := c.Logger.Validate(); err != nil {
+		return err
+	}
+
 	// Respect the configuration from environment variable if available.
 	envReadyTimeout := os.Getenv("SRUN_READY_TIMEOUT")
 	if envReadyTimeout != "" {

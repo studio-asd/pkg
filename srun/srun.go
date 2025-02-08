@@ -128,8 +128,12 @@ var (
 // Context holds runner context including all objects that belong to the runner. For example we can pass logger and otel meter
 // object via this context.
 type Context struct {
-	Ctx    context.Context
-	Logger *slog.Logger
+	// RunnerAppName is the same with config.Name or the service name for the runner.
+	RunnerAppName    string
+	RunnerAppVersion string
+	Ctx              context.Context
+	StateHelper      *StateHelper
+	Logger           *slog.Logger
 	// Meter is open telemetry metric meter object to record metrics via open telemetry provider. The provider exports the metric
 	// via prometheus exporter.
 	//
@@ -568,7 +572,12 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 		initCtx, cancel := context.WithTimeout(ctxSignal, r.config.Timeout.InitTimeout)
 		go func() {
 			initContext := Context{
-				Ctx: initCtx,
+				RunnerAppName: r.config.Name,
+				Ctx:           initCtx,
+				StateHelper: &StateHelper{
+					serivceName: service.Name(),
+					state:       int(serviceStateStopped),
+				},
 				// Assign a new logger from the default logger(we have configured this before), so each logger will have default attributes
 				// called 'logger_scope' to tell the scope of the logger.
 				Logger:         slog.Default().With(slog.String("logger_scope", svc.Name())),

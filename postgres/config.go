@@ -93,6 +93,9 @@ func (c *ConnectConfig) validate() error {
 	if err := c.TracerConfig.validate(); err != nil {
 		return err
 	}
+	if err := c.MeterConfig.validate(); err != nil {
+		return err
+	}
 	// Inject the information to the tracer configuration as we want to inject these information
 	// when create spans.
 	c.TracerConfig.host = c.Host
@@ -171,10 +174,9 @@ func (t *TracerConfig) traceAttributesFromContext(ctx context.Context, query str
 }
 
 type MeterConfig struct {
-	// MonitorInterval controls the interval of background job to actively monitor the stats of Postgres connection.
-	// If the value of interval is zero(0) then no background job will be spawn.
-	MonitorInterval time.Duration
-	Meter           metric.Meter
+	// MonitorStats enable PostgreSQL stats monitoring in the background. The stats will be collected for every 30 seconds.
+	MonitorStats bool
+	Meter        metric.Meter
 }
 
 func (m *MeterConfig) validate() error {

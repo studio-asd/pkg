@@ -323,3 +323,45 @@ func Serve(name string, runner ServiceRunner, fn func(ctx Context) error) error 
 		RegisterRunnerAwareServices(lrt),
 	)
 }
+
+// StateHelper is a simple state management for the service so each service can easily
+// maintain their own internal state without creating the same object to guard their state.
+//
+// The StateHelper only provide Running and Stopped state because most of the time external services
+// only need to record whether the service is still running or not.
+type StateHelper struct {
+	serivceName string
+	mu          sync.Mutex
+	state       int
+}
+
+func (s *StateHelper) ServiceName() string {
+	return s.serivceName
+}
+
+func (s *StateHelper) SetRunning() {
+	s.mu.Lock()
+	s.state = int(serviceStateRunning)
+	s.mu.Unlock()
+}
+
+func (s *StateHelper) SetStopped() {
+	s.mu.Lock()
+	s.state = int(serviceStateStopped)
+	s.mu.Unlock()
+}
+
+func (s *StateHelper) IsRunning() bool {
+	return s.get() == int(serviceStateRunning)
+}
+
+func (s *StateHelper) IsStopped() bool {
+	return s.get() == int(serviceStateStopped)
+}
+
+func (s *StateHelper) get() int {
+	s.mu.Lock()
+	state := s.state
+	s.mu.Unlock()
+	return state
+}

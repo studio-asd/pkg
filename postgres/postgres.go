@@ -135,7 +135,7 @@ func Connect(ctx context.Context, config ConnectConfig) (*Postgres, error) {
 	}
 	// Start the monitoring goroutine if monitor configuration is on, we want to monitor the number of connections
 	// and the general stats of the postgres object.
-	if config.MeterConfig.MonitorInterval > 0 {
+	if config.MeterConfig.MonitorStats {
 		go monitorPostgresStats(monitorCtx, p)
 	}
 	return p, nil
@@ -565,16 +565,16 @@ func (p *Postgres) StdlibDB() *sql.DB {
 
 // monitorPostgresStats creates a ticker loop and monitor the postgres database periodically via open telemetry.
 func monitorPostgresStats(ctx context.Context, p *Postgres) error {
-	ticker := time.NewTicker(p.config.MeterConfig.MonitorInterval)
-	openConns, err := p.config.MeterConfig.Meter.Int64Counter("postgres.stats.max_open_conns")
+	ticker := time.NewTicker(time.Second * 30)
+	openConns, err := p.config.MeterConfig.Meter.Int64Counter("postgres_client_stats_max_open_conns")
 	if err != nil {
 		return err
 	}
-	idleConns, err := p.config.MeterConfig.Meter.Int64Counter("postgres.stats.idle_conns")
+	idleConns, err := p.config.MeterConfig.Meter.Int64Counter("postgres_client_stats_idle_conns")
 	if err != nil {
 		return err
 	}
-	inUseConns, err := p.config.MeterConfig.Meter.Int64Counter("postgres.stats.in_use")
+	inUseConns, err := p.config.MeterConfig.Meter.Int64Counter("postgres_client_stats_in_use")
 	if err != nil {
 		return err
 	}

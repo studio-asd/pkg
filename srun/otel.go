@@ -110,8 +110,8 @@ func newOtelMetricMeterAndProviderService(config OtelMetricConfig) (metric.Meter
 		config.MeterName,
 		metric.WithInstrumentationVersion(config.serviceVersion),
 		metric.WithInstrumentationAttributes(
-			attribute.String("app.name", config.serviceName),
-			attribute.String("app.version", config.serviceVersion),
+			attribute.String("service_name", config.serviceName),
+			attribute.String("service_version", config.serviceVersion),
 		),
 	)
 

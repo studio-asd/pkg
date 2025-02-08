@@ -424,6 +424,26 @@ func TestLongRunningTask(t *testing.T) {
 	}
 }
 
+func TestStateHelper(t *testing.T) {
+	t.Parallel()
+
+	name := "testing"
+	s := &StateHelper{
+		serivceName: name,
+	}
+	if s.ServiceName() != name {
+		t.Fatalf("expecting %s but got %s", name, s.ServiceName())
+	}
+	s.SetRunning()
+	if !s.IsRunning() && s.get() != int(serviceStateRunning) {
+		t.Fatalf("service is not in running state, got %d", s.get())
+	}
+	s.SetStopped()
+	if !s.IsStopped() && s.get() != int(serviceStateStopped) {
+		t.Fatalf("service is not in running state, got %d", s.get())
+	}
+}
+
 func newLRT(t *testing.T, name string, fn func(Context) error) *LongRunningTask {
 	t.Helper()
 

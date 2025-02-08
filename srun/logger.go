@@ -24,12 +24,30 @@ type LoggerConfig struct {
 	Output io.Writer
 }
 
+func (l *LoggerConfig) Validate() error {
+	if l.Format == "" {
+		l.Format = LogFormatText
+	}
+	// If the log format from GOPKG_LOG_FORMAT is not empty, then we need to respect the env variable.
+	logFormat := os.Getenv("GOPKG_LOG_FORMAT")
+	if logFormat != "" {
+		l.Format = logFormat
+	}
+
+	if l.Output == nil {
+		l.Output = os.Stderr
+	}
+	return nil
+}
+
 func setDefaultSlog(config LoggerConfig) {
 	var handler slog.Handler
 	var replacerFunc func([]string, slog.Attr) slog.Attr
 
-	// Set the default format of logging to text.
-	if config.Format == "" {
+	// Ensure format is not empty, if format empty then we change the format back to text.
+	switch config.Format {
+	case LogFormatJSON, LogFormatText:
+	default:
 		config.Format = LogFormatText
 	}
 	// Remove time from the slog logger by checking the attributes when logging.
