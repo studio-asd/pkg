@@ -10,7 +10,8 @@ import (
 
 func main() {
 	srun.New(srun.Config{
-		Name: "testing",
+		Name:    "testing",
+		Version: "0.1",
 		Healthcheck: srun.HealthcheckConfig{
 			Enabled: false,
 		},

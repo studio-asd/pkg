@@ -18,7 +18,9 @@ func (a *arrayFlag) Set(value string) error {
 
 // Flags stores the flag that pre-defined by srun.
 type Flags struct {
-	fs           *flag.FlagSet
+	fs *flag.FlagSet
+	// version define that the program will print version instead of run the program.
+	version      bool
 	config       string
 	featureFlags map[string]bool
 }
@@ -37,6 +39,7 @@ func (f *Flags) Parse(args ...string) error {
 	var featureFlags arrayFlag
 	f.fs.Var(&featureFlags, "feature.enable", "--feature.enable=feature_name")
 	f.fs.StringVar(&f.config, "config", "", "--config=config_name")
+	f.fs.BoolVar(&f.version, "version", false, "--version")
 	f.fs.Parse(flagArgs)
 
 	for _, feature := range featureFlags {

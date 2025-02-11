@@ -10,11 +10,17 @@ func TestParseFlags(t *testing.T) {
 		args           []string
 		expectConfig   string
 		expectFeatures map[string]bool
+		expectVersion  bool
 	}{
 		{
 			name:         "config",
 			args:         []string{"--config=some.yaml"},
 			expectConfig: "some.yaml",
+		},
+		{
+			name:          "version",
+			args:          []string{"--version"},
+			expectVersion: true,
 		},
 		{
 			name: "feature_flags",
@@ -30,12 +36,13 @@ func TestParseFlags(t *testing.T) {
 			},
 		},
 		{
-			name: "both flags",
+			name: "all flags",
 			args: []string{
 				"--config=some.yaml",
 				"--feature.enable=feature_1",
 				"--feature.enable=feature_2",
 				"--feature.enable=feature_3",
+				"--version",
 			},
 			expectConfig: "some.yaml",
 			expectFeatures: map[string]bool{
@@ -43,6 +50,7 @@ func TestParseFlags(t *testing.T) {
 				"feature_2": true,
 				"feature_3": true,
 			},
+			expectVersion: true,
 		},
 	}
 

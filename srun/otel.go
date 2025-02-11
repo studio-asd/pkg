@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/runtime"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
@@ -116,6 +117,10 @@ func newOtelMetricMeterAndProviderService(config OtelMetricConfig) (metric.Meter
 	)
 
 	providerTask, err := NewLongRunningTask("otel-metric-provider", func(ctx Context) error {
+		// Start the runtime stats retrieval with resolution of ten(10) seconds.
+		if err := runtime.Start(runtime.WithMinimumReadMemStatsInterval(time.Second * 10)); err != nil {
+			return err
+		}
 		// Wait until the context is cancalled to shutdown the provider.
 		<-ctx.Ctx.Done()
 

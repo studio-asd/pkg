@@ -722,7 +722,7 @@ level=INFO msg="[Service] a_service: STOPPED" logger_scope=service_runner
 	})
 }
 
-func TestSrunKill(t *testing.T) {
+func TestSrun(t *testing.T) {
 	t.Parallel()
 
 	wd, err := os.Getwd()
@@ -754,38 +754,53 @@ func TestSrunKill(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, signal := range signals {
-		sig := signal
-		t.Run(sig.String(), func(t *testing.T) {
-			runCmd := exec.Command(testBinary)
-			if err := runCmd.Start(); err != nil {
-				t.Fatal(err)
-			}
-			// Send the wait to the channel so we are not blocking the test.
-			errC := make(chan error, 1)
-			go func() {
-				err := runCmd.Wait()
-				errC <- err
-			}()
-			// Initial wait if there is an initial error when running the program.
-			tAfterC := time.After(time.Second)
-			select {
-			case err := <-errC:
-				t.Fatal(err)
-			case <-tAfterC:
-			}
+	t.Run("test_kill", func(t *testing.T) {
+		for _, signal := range signals {
+			sig := signal
+			t.Run(sig.String(), func(t *testing.T) {
+				runCmd := exec.Command(testBinary)
+				if err := runCmd.Start(); err != nil {
+					t.Fatal(err)
+				}
+				// Send the wait to the channel so we are not blocking the test.
+				errC := make(chan error, 1)
+				go func() {
+					err := runCmd.Wait()
+					errC <- err
+				}()
+				// Initial wait if there is an initial error when running the program.
+				tAfterC := time.After(time.Second)
+				select {
+				case err := <-errC:
+					t.Fatal(err)
+				case <-tAfterC:
+				}
 
-			if err := runCmd.Process.Signal(sig); err != nil {
-				t.Fatal(err)
-			}
-			// Wait until the program exit, program should exit with code zero(0) and nil error.
-			err := <-errC
-			if err != nil {
-				t.Fatal(err)
-			}
-			if runCmd.ProcessState.ExitCode() != 0 {
-				t.Fatalf("expecting 0 exit code but got %d", runCmd.ProcessState.ExitCode())
-			}
-		})
-	}
+				if err := runCmd.Process.Signal(sig); err != nil {
+					t.Fatal(err)
+				}
+				// Wait until the program exit, program should exit with code zero(0) and nil error.
+				err := <-errC
+				if err != nil {
+					t.Fatal(err)
+				}
+				if runCmd.ProcessState.ExitCode() != 0 {
+					t.Fatalf("expecting 0 exit code but got %d", runCmd.ProcessState.ExitCode())
+				}
+			})
+		}
+	})
+
+	t.Run("version_flag", func(t *testing.T) {
+		runCmd := exec.Command(testBinary, "--version")
+		out, err := runCmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		outstr := string(out)
+
+		if outstr == "v0.1" {
+			t.Fatalf("expecting v0.1 but got %s", outstr)
+		}
+	})
 }

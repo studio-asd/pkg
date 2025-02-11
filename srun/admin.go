@@ -190,3 +190,13 @@ func (a *adminHTTPServer) handler() *http.ServeMux {
 	})
 	return mux
 }
+
+// DefaultHealthcheckFunc always returns nil thus the /health endpoint will always return 200(OK).
+func DefaultHealthcheckFunc() error {
+	return nil
+}
+
+// DefaultReadinessFunc always returns nil thus the /ready endpoint will always return 200(OK).
+func DefaultReadinessFunc() error {
+	return nil
+}

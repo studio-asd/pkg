@@ -329,6 +329,18 @@ func New(config Config) *Runner {
 	}
 	setDefaultSlog(conf.Logger)
 
+	f := newFlags()
+	// Slice the args after first argument as the first argument is usually the program name.
+	if err := f.Parse(os.Args[1:]...); err != nil {
+		panic(err)
+	}
+	// If version is mentioned in the flag, then we should print the current program version
+	// and exit with zero(0).
+	if f.version {
+		fmt.Printf("v%s\n", conf.Version)
+		os.Exit(0)
+	}
+
 	var (
 		upg *upgrader
 		err error
@@ -355,15 +367,10 @@ func New(config Config) *Runner {
 		panic(err)
 	}
 
-	f := newFlags()
-	// Slice the args after first argument as the first argument is usually the program name.
-	if err := f.Parse(os.Args[1:]...); err != nil {
-		panic(err)
-	}
 	// Record the gauge of feature flags as we need to monitor the number of the flags to ensure the flags
 	// is not exceeding some limit. Some of the feature flag is a debt, and we need to pay the debt before
 	// adding more.
-	gauge, err := meter.Int64Gauge("srun-feature-flags")
+	gauge, err := meter.Int64Gauge("srun_feature_flags_total")
 	if err != nil {
 		panic(err)
 	}
