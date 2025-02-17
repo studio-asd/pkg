@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"runtime/debug"
 	"sync"
 	"syscall"
@@ -342,9 +343,10 @@ func New(config Config) *Runner {
 	}
 
 	var (
-		upg *upgrader
-		err error
-		ctx = context.Background()
+		upg       *upgrader
+		err       error
+		ctx       = context.Background()
+		goVersion = runtime.Version()
 	)
 
 	if config.Upgrader.SelfUpgrade {
@@ -357,6 +359,14 @@ func New(config Config) *Runner {
 		// also exit.
 		ctx = upg.Context()
 	}
+	// Inject information to the otel metric configuration
+	config.OtelMetric.serviceName = config.Name
+	config.OtelMetric.serviceVersion = config.Version
+	config.OtelMetric.goVersion = goVersion
+	// Inject information to the otel trace configuration
+	config.OtelTracer.serviceName = config.Name
+	config.OtelTracer.serviceVersion = config.Version
+	config.OtelTracer.goVersion = goVersion
 
 	meter, meterLrt, err := newOtelMetricMeterAndProviderService(config.OtelMetric)
 	if err != nil {

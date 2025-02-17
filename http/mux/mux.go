@@ -4,6 +4,9 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
 )
 
 type (
@@ -108,14 +111,21 @@ func (m *Mux) handlerFunc(method, pattern string, handler HandlerFunc) {
 	for i := range m.middlewares {
 		handler = m.middlewares[len(m.middlewares)-1-i](handler)
 	}
-
+	// Create a OtelHandler and wrap everything around it to monitor the http requests.
+	otelHandler := otelhttp.NewHandler(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			rwDelegator := newResponseWriterDelegator(pattern, w)
+			handler(rwDelegator, r)
+		}),
+		pattern,
+		otelhttp.WithTracerProvider(otel.GetTracerProvider()),
+		otelhttp.WithMeterProvider(otel.GetMeterProvider()),
+	)
 	// Since go v1.22.0 it is now possible to route the handler using "{METHOD} + {pattern}". For example, "GET /v1/some/endpoint".
 	// And it also handles the wildcard within pattern like "GET /v1/some/endpoint/{id}".
 	// For more information you can look at the documentation: https://pkg.go.dev/net/http#ServeMux.
-	pattern = method + " " + pattern
-	m.muxer.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-		rwDelegator := newResponseWriterDelegator(pattern, w)
-		handler(rwDelegator, r)
+	m.muxer.HandleFunc(method+" "+pattern, func(w http.ResponseWriter, r *http.Request) {
+		otelHandler.ServeHTTP(w, r)
 	})
 }
 

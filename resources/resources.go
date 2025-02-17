@@ -2,11 +2,13 @@ package resources
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 
-	"github.com/studio-asd/pkg/srun"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/studio-asd/pkg/srun"
 )
 
 var _ srun.ServiceRunnerAware = (*Resources)(nil)
@@ -24,7 +26,7 @@ func (c Config) Validate() error {
 
 type Resources struct {
 	config Config
-
+	logger *slog.Logger
 	// OpenTelemetry tracer and metric meter.
 	tracer trace.Tracer
 	meter  metric.Meter
@@ -55,8 +57,15 @@ func (r *Resources) Name() string {
 }
 
 func (r *Resources) Init(ctx srun.Context) error {
+	r.logger = ctx.Logger
 	r.tracer = ctx.Tracer
 	r.meter = ctx.Meter
+
+	// Inject the logger for all the resources.
+	r.config.Postgres.logger = r.logger
+
+	// The resources are all connected in the init process because srun runs all the initialization at the start of the process instead
+	// of running all the process through the end.
 	return r.init(ctx.Ctx)
 }
 
@@ -65,6 +74,10 @@ func (r *Resources) init(ctx context.Context) error {
 	defer r.mu.Unlock()
 
 	if r.postrgres != nil {
+		r.logger.Info(
+			"[resources] Found postgres configuration, establishing connection to PostgreSQL databases...",
+			slog.Int("postgres_config_count", len(r.config.Postgres.PostgresConnections)),
+		)
 		resources, err := r.config.Postgres.connect(ctx)
 		if err != nil {
 			return err

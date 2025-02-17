@@ -60,6 +60,11 @@ func (d DSN) URL() string {
 	return buildPostgresURL(d.Username, d.Password, d.Host, d.Port, d.DatabaseName, d.SSLMode)
 }
 
+// SafeURL generates a safe URL(without password) but not usable for the dsn for connecting to the database.
+func (d DSN) SafeURL() string {
+	return buildPostgresURL(d.Username, "[xxxx]", d.Host, d.Port, d.DatabaseName, d.SSLMode)
+}
+
 func (d DSN) BuildConfig() (ConnectConfig, error) {
 	config := ConnectConfig{
 		Driver:   "pgx",

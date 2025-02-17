@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/runtime"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/prometheus"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
@@ -25,6 +26,7 @@ type OTelTracerConfig struct {
 	// for the open-telemetry.
 	serviceName    string
 	serviceVersion string
+	goVersion      string
 }
 
 // newOTelTracerService returns a function to trigger and starts open telemetry processes. The function returns a function to allow us to use
@@ -40,6 +42,7 @@ func newOTelTracerService(config OTelTracerConfig) (trace.Tracer, *LongRunningTa
 			semconv.SchemaURL,
 			semconv.ServiceName(config.serviceName),
 			semconv.ServiceVersion(config.serviceVersion),
+			attribute.String("go.version", config.goVersion),
 		),
 	)
 	if err != nil {
@@ -59,6 +62,8 @@ func newOTelTracerService(config OTelTracerConfig) (trace.Tracer, *LongRunningTa
 		),
 		tracesdk.WithResource(res),
 	)
+	// Set a global trace provider so it can be used elsewhere in the program.
+	otel.SetTracerProvider(provider)
 	tracer := provider.Tracer(config.serviceName)
 
 	fn := func(ctx Context) error {
@@ -92,6 +97,7 @@ type OtelMetricConfig struct {
 	// for the open-telemetry.
 	serviceName    string
 	serviceVersion string
+	goVersion      string
 }
 
 // newOtelMetricsMeterAndProviderService returns open telemetry meter and provider so we can use them inside the runner and inject it to the Context.
@@ -100,20 +106,31 @@ func newOtelMetricMeterAndProviderService(config OtelMetricConfig) (metric.Meter
 	if config.Disable {
 		return meternoop.NewMeterProvider().Meter("noop"), nil, nil
 	}
+	res, err := resource.Merge(
+		resource.Default(),
+		resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceName(config.serviceName),
+			semconv.ServiceVersion(config.serviceVersion),
+			attribute.String("go_version", config.goVersion),
+		),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	promExporter, err := prometheus.New()
 	if err != nil {
 		return nil, nil, err
 	}
 	provider := metricsdk.NewMeterProvider(
 		metricsdk.WithReader(promExporter),
+		metricsdk.WithResource(res),
 	)
+	// Set the meter provider so it can be used elsewhere in the program
+	otel.SetMeterProvider(provider)
 	meter := provider.Meter(
 		config.MeterName,
-		metric.WithInstrumentationVersion(config.serviceVersion),
-		metric.WithInstrumentationAttributes(
-			attribute.String("service_name", config.serviceName),
-			attribute.String("service_version", config.serviceVersion),
-		),
 	)
 
 	providerTask, err := NewLongRunningTask("otel-metric-provider", func(ctx Context) error {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -155,6 +156,7 @@ func (soc *PostgresOverrideableConfig) OverrideValue(val PostgresOverrideableCon
 }
 
 type PostgresResourcesConfig struct {
+	logger                     *slog.Logger
 	PostgresConnections        []PostgresConnConfig `yaml:"connects"`
 	PostgresOverrideableConfig `yaml:",inline"`
 }
@@ -172,8 +174,31 @@ func (sc *PostgresResourcesConfig) Validate() error {
 func (sc *PostgresResourcesConfig) connect(ctx context.Context) (*postgresResources, error) {
 	resources := newpostgresResources()
 	for _, conn := range sc.PostgresConnections {
+		primaryDSN, err := postgres.ParseDSN(conn.PrimaryDB.DSN)
+		if err != nil {
+			return nil, err
+		}
+		attrs := []slog.Attr{
+			slog.String("db.name", conn.Name),
+			slog.String("db.driver", conn.Driver),
+			slog.String("db.tracer", conn.Tracer),
+			slog.String("db.primary_dsn", primaryDSN.SafeURL()),
+		}
+
+		sc.logger.LogAttrs(
+			ctx,
+			slog.LevelInfo,
+			"[resources][postgres] connecting to PostgreSQL database",
+			attrs...,
+		)
 		conns, err := conn.Connect(ctx)
 		if err != nil {
+			sc.logger.LogAttrs(
+				ctx,
+				slog.LevelError,
+				"[resources][postgres] failed to connect to PostgreSQL database",
+				attrs...,
+			)
 			return nil, err
 		}
 		resources.setPostgres(conn.Name, conns)
