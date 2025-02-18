@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 
@@ -56,9 +57,6 @@ func New(ctx context.Context, config Config) (*Resources, error) {
 		config: config,
 		stopC:  make(chan struct{}, 1),
 	}
-	if err := r.init(ctx); err != nil {
-		return nil, err
-	}
 	return r, nil
 }
 
@@ -70,17 +68,41 @@ func (r *Resources) Init(ctx srun.Context) error {
 	r.logger = ctx.Logger
 	r.tracer = ctx.Tracer
 	r.meter = ctx.Meter
-
 	// Inject the logger for all the resources.
 	r.config.Postgres.logger = r.logger
 	r.config.GRPC.logger = r.logger
-
-	// The resources are all connected in the init process because srun runs all the initialization at the start of the process instead
-	// of running all the process through the end.
-	return r.init(ctx.Ctx)
+	return nil
 }
 
-func (r *Resources) init(ctx context.Context) error {
+func (r *Resources) Run(ctx context.Context) error {
+	err := r.run(ctx)
+	<-r.stopC
+	return err
+}
+
+func (r *Resources) Ready(ctx context.Context) error {
+	return nil
+}
+
+func (r *Resources) Stop(ctx context.Context) error {
+	var errs error
+	if r.postrgres != nil {
+		r.logger.Info("[resources] closing all PostgreSQL connections")
+		if err := r.postrgres.close(); err != nil {
+			errs = errors.Join(errs, err)
+		}
+	}
+	if r.grpc != nil {
+		r.logger.Info("[resources] closing all gRPC connections")
+		if err := r.grpc.clientResources.close(); err != nil {
+			errs = errors.Join(errs, err)
+		}
+	}
+	r.stopC <- struct{}{}
+	return nil
+}
+
+func (r *Resources) run(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -111,24 +133,5 @@ func (r *Resources) init(ctx context.Context) error {
 		}
 		r.grpc = grpcResources
 	}
-	return nil
-}
-
-func (r *Resources) Run(ctx context.Context) error {
-	<-r.stopC
-	return nil
-}
-
-func (r *Resources) Ready(ctx context.Context) error {
-	return nil
-}
-
-func (r *Resources) Stop(ctx context.Context) error {
-	if r.postrgres != nil {
-		if err := r.postrgres.close(); err != nil {
-			return err
-		}
-	}
-	r.stopC <- struct{}{}
 	return nil
 }

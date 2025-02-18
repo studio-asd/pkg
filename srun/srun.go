@@ -296,6 +296,8 @@ type Runner struct {
 
 	// flags store the command line flags via flag.FlagSet.
 	flags *Flags
+	// testConfFn is the function that will be triggered when --test-config flag is defined.
+	testConfFn func(Context) error
 }
 
 // Error is a helper function that returns functions that satisfy srun.Run. The helper function can be used to easily wrap an error when
@@ -493,6 +495,29 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 		readyTimeout            = r.config.Timeout.ReadyTimeout
 		gracefulShutdownTimeout = r.config.Timeout.ShutdownGracefulPeriod
 	)
+	// If the program is running with --test-config then we should not attempted to run the whole program. In this case, just trigger
+	// the test config function then exit.
+	if r.flags.TestConfig() {
+		r.logger.Info("program is running in test configuration mode, triggering the test function")
+		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
+		defer cancel()
+		if err := r.testConfFn(Context{
+			RunnerAppName: r.config.Name,
+			Ctx:           timeoutCtx,
+			StateHelper: &StateHelper{
+				serivceName: "test-config",
+				state:       int(serviceStateStopped),
+			},
+			Logger:         r.logger,
+			Meter:          r.otelMeter,
+			Tracer:         r.otelTracer,
+			HealthNotifier: &HealthcheckNotifier{noop: true},
+			Flags:          r.flags,
+		}); err != nil {
+			return err
+		}
+		return nil
+	}
 
 	// Set the state of the service runner to run/not running and catch panic to enrich the error.
 	defer func() {
@@ -792,6 +817,18 @@ func (r *Runner) MustRun(run func(ctx context.Context, runner ServiceRunner) err
 		return
 	}
 	os.Exit(exitCode)
+}
+
+// SetTestConfigFunc sets the function for test configuration and will only be triggered if --test-config flag
+// is defined when running the program.
+//
+// With this function, the program then can run in a test mode on whether the program can run with the configuration
+// or not before fully running the program without --test-config flag.
+func (r *Runner) SetTestConfigFunc(fn func(Context) error) {
+	if fn == nil {
+		return
+	}
+	r.testConfFn = fn
 }
 
 // isError returns true if the error is not expected by the runner. This function is needed and a bit unfortunate because

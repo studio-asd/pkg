@@ -799,8 +799,25 @@ func TestSrun(t *testing.T) {
 		}
 		outstr := string(out)
 
-		if outstr == "v0.1" {
+		if outstr != "v0.1" {
 			t.Fatalf("expecting v0.1 but got %s", outstr)
+		}
+	})
+
+	t.Run("test config flag", func(t *testing.T) {
+		expect := `level=INFO msg="Running program: testing" logger_scope=service_runner
+level=INFO msg="program is running in test configuration mode, triggering the test function" logger_scope=service_runner
+level=ERROR msg="in test config func"
+`
+		runCmd := exec.Command(testBinary, "--test-config")
+		out, err := runCmd.CombinedOutput()
+		if err == nil {
+			t.Fatal("expecting error")
+		}
+		outstr := string(out)
+
+		if outstr != expect {
+			t.Fatalf("expecting\n%s\n but got\n%s", expect, outstr)
 		}
 	})
 }

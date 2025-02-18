@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -9,7 +10,7 @@ import (
 )
 
 func main() {
-	srun.New(srun.Config{
+	r := srun.New(srun.Config{
 		Name:    "testing",
 		Version: "0.1",
 		Healthcheck: srun.HealthcheckConfig{
@@ -22,10 +23,15 @@ func main() {
 			SelfUpgrade: true,
 		},
 		Logger: srun.LoggerConfig{
-			Format: "json",
-			Level:  slog.LevelInfo,
+			Format:     "text",
+			Level:      slog.LevelInfo,
+			RemoveTime: true,
 		},
-	}).MustRun(run())
+	})
+	r.SetTestConfigFunc(func(ctx srun.Context) error {
+		return errors.New("in test config func")
+	})
+	r.MustRun(run())
 }
 
 func run() func(context.Context, srun.ServiceRunner) error {
