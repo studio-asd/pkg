@@ -33,6 +33,7 @@ type OTelTracerConfig struct {
 // the LongRunningTask so we can listen to the exit signal.
 func newOTelTracerService(config OTelTracerConfig) (trace.Tracer, *LongRunningTask, error) {
 	if config.Disable {
+		otel.SetTracerProvider(tracenoop.NewTracerProvider())
 		return tracenoop.NewTracerProvider().Tracer("noop"), nil, nil
 	}
 
@@ -104,6 +105,7 @@ type OtelMetricConfig struct {
 // The function returns otel provider as LongRunningTask as we need to shut it down when the program stops to properly flush all metrics.
 func newOtelMetricMeterAndProviderService(config OtelMetricConfig) (metric.Meter, *LongRunningTask, error) {
 	if config.Disable {
+		otel.SetMeterProvider(meternoop.NewMeterProvider())
 		return meternoop.NewMeterProvider().Meter("noop"), nil, nil
 	}
 	res, err := resource.Merge(

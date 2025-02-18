@@ -15,11 +15,19 @@ var _ srun.ServiceRunnerAware = (*Resources)(nil)
 
 type Config struct {
 	Postgres *PostgresResourcesConfig `yaml:"postgres"`
+	GRPC     *GRPCResourcesConfig     `yaml:"grpc"`
 }
 
 func (c Config) Validate() error {
-	if err := c.Postgres.Validate(); err != nil {
-		return err
+	if c.Postgres != nil {
+		if err := c.Postgres.Validate(); err != nil {
+			return err
+		}
+	}
+	if c.GRPC != nil {
+		if err := c.GRPC.Validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -36,6 +44,8 @@ type Resources struct {
 
 	// PostgreSQL connections.
 	postrgres *postgresResources
+	// GRPC client connections.
+	grpc *grpcResources
 }
 
 func New(ctx context.Context, config Config) (*Resources, error) {
@@ -63,6 +73,7 @@ func (r *Resources) Init(ctx srun.Context) error {
 
 	// Inject the logger for all the resources.
 	r.config.Postgres.logger = r.logger
+	r.config.GRPC.logger = r.logger
 
 	// The resources are all connected in the init process because srun runs all the initialization at the start of the process instead
 	// of running all the process through the end.
@@ -73,16 +84,32 @@ func (r *Resources) init(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.postrgres != nil {
+	// PostgreSQL.
+	if r.config.Postgres != nil {
 		r.logger.Info(
 			"[resources] Found postgres configuration, establishing connection to PostgreSQL databases...",
 			slog.Int("postgres_config_count", len(r.config.Postgres.PostgresConnections)),
 		)
-		resources, err := r.config.Postgres.connect(ctx)
+		pgResources, err := r.config.Postgres.connect(ctx)
 		if err != nil {
 			return err
 		}
-		r.postrgres = resources
+		r.postrgres = pgResources
+	}
+	// GRPC.
+	if r.config.GRPC != nil {
+		// GRPC Clients.
+		if len(r.config.GRPC.ClientResources) > 0 {
+			r.logger.Info(
+				"[resources] Found grpc clients configuration, establishing connection to gRPC endpoints...",
+				slog.Int("grpc_clients_config_count", len(r.config.GRPC.ClientResources)),
+			)
+		}
+		grpcResources, err := r.config.GRPC.connect(ctx)
+		if err != nil {
+			return err
+		}
+		r.grpc = grpcResources
 	}
 	return nil
 }
