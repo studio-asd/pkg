@@ -7,11 +7,10 @@ import (
 	"time"
 
 	"github.com/studio-asd/pkg/instrumentation"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	meternoop "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/trace"
-	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
 const (
@@ -137,7 +136,7 @@ type TracerConfig struct {
 
 func (t *TracerConfig) validate() error {
 	if t.Tracer == nil {
-		t.Tracer = tracenoop.NewTracerProvider().Tracer("noop")
+		t.Tracer = otel.GetTracerProvider().Tracer("postgres")
 	}
 	return nil
 }
@@ -181,7 +180,7 @@ type MeterConfig struct {
 
 func (m *MeterConfig) validate() error {
 	if m.Meter == nil {
-		m.Meter = meternoop.NewMeterProvider().Meter("noop")
+		m.Meter = otel.GetMeterProvider().Meter("postgres")
 	}
 	return nil
 }

@@ -740,7 +740,6 @@ func TestSrun(t *testing.T) {
 
 	testTmpDir := t.TempDir()
 	testBinary := filepath.Join(testTmpDir, "testing")
-	// testPID := filepath.Join(testTmpDir, "testing.pid")
 
 	// Build the test binary.
 	cmd := exec.Command("go", "build", "-o", testBinary, testProgGo)

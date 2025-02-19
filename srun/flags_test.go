@@ -6,11 +6,12 @@ func TestParseFlags(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name           string
-		args           []string
-		expectConfig   string
-		expectFeatures map[string]bool
-		expectVersion  bool
+		name             string
+		args             []string
+		expectConfig     string
+		expectFeatures   map[string]bool
+		expectVersion    bool
+		expectTestConfig bool
 	}{
 		{
 			name:         "config",
@@ -21,6 +22,11 @@ func TestParseFlags(t *testing.T) {
 			name:          "version",
 			args:          []string{"--version"},
 			expectVersion: true,
+		},
+		{
+			name:             "test config",
+			args:             []string{"--test-config"},
+			expectTestConfig: true,
 		},
 		{
 			name: "feature_flags",
@@ -43,6 +49,7 @@ func TestParseFlags(t *testing.T) {
 				"--feature.enable=feature_2",
 				"--feature.enable=feature_3",
 				"--version",
+				"--test-config",
 			},
 			expectConfig: "some.yaml",
 			expectFeatures: map[string]bool{
@@ -50,7 +57,8 @@ func TestParseFlags(t *testing.T) {
 				"feature_2": true,
 				"feature_3": true,
 			},
-			expectVersion: true,
+			expectVersion:    true,
+			expectTestConfig: true,
 		},
 	}
 
@@ -61,7 +69,10 @@ func TestParseFlags(t *testing.T) {
 				t.Fatal(err)
 			}
 			if test.expectConfig != f.config {
-				t.Fatalf("expecting %s but got %s", test.expectConfig, f.config)
+				t.Fatalf("expecting config %s but got %s", test.expectConfig, f.config)
+			}
+			if test.expectTestConfig != f.testConfig {
+				t.Fatalf("expecting test config %v but got %v", test.expectTestConfig, f.testConfig)
 			}
 			if len(test.expectFeatures) != len(f.featureFlags) {
 				t.Fatalf("feature_flag: expecting length of %d but got %d", len(test.expectFeatures), len(f.featureFlags))

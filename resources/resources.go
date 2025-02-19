@@ -40,8 +40,9 @@ type Resources struct {
 	tracer trace.Tracer
 	meter  metric.Meter
 
-	mu    sync.Mutex
-	stopC chan struct{}
+	mu      sync.Mutex
+	running bool
+	stopC   chan struct{}
 
 	// PostgreSQL connections.
 	postrgres *postgresResources
@@ -75,16 +76,36 @@ func (r *Resources) Init(ctx srun.Context) error {
 }
 
 func (r *Resources) Run(ctx context.Context) error {
+	r.mu.Lock()
+	if r.running {
+		r.mu.Unlock()
+		return nil
+	}
+	r.running = true
+	r.mu.Unlock()
+
 	err := r.run(ctx)
 	<-r.stopC
 	return err
 }
 
 func (r *Resources) Ready(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.running {
+		return errors.New("the resources are stopped")
+	}
 	return nil
 }
 
 func (r *Resources) Stop(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Early return when the resources is not currently running.
+	if !r.running {
+		return nil
+	}
+
 	var errs error
 	if r.postrgres != nil {
 		r.logger.Info("[resources] closing all PostgreSQL connections")
@@ -98,12 +119,15 @@ func (r *Resources) Stop(ctx context.Context) error {
 			errs = errors.Join(errs, err)
 		}
 	}
+	// Change the state from running to stopped.
+	r.running = false
 	r.stopC <- struct{}{}
-	return nil
+	return errs
 }
 
 func (r *Resources) run(ctx context.Context) error {
 	r.mu.Lock()
+	r.running = true
 	defer r.mu.Unlock()
 
 	// PostgreSQL.

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -623,8 +624,8 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 				// Assign a new logger from the default logger(we have configured this before), so each logger will have default attributes
 				// called 'logger_scope' to tell the scope of the logger.
 				Logger:         slog.Default().With(slog.String("logger_scope", svc.Name())),
-				Meter:          r.otelMeter,
-				Tracer:         r.otelTracer,
+				Meter:          otel.GetMeterProvider().Meter(r.config.Name),
+				Tracer:         otel.GetTracerProvider().Tracer(r.config.Name),
 				HealthNotifier: &HealthcheckNotifier{noop: true},
 				Flags:          r.flags,
 			}
