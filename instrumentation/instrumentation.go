@@ -3,6 +3,7 @@ package instrumentation
 import (
 	"context"
 	"log/slog"
+	"net/http"
 
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -83,6 +84,32 @@ func (b Baggage) ToTextMapCarrier() map[string]string {
 	carrier[debugIDInst] = b.DebugID
 	carrier[preferredLanguageInst] = b.PreferredLanguage
 	return carrier
+}
+
+// ToHTTPHeader transform the baggage into map[string]string as the carrier.
+func (b Baggage) ToHTTPHeader() http.Header {
+	// Please adjust the length of the text map carrier based on the baggage KV.
+	carrier := make(map[string][]string, 6)
+	carrier[requestIDInst] = []string{b.RequestID}
+	carrier[apiNameInst] = []string{b.APIName}
+	carrier[apiOwnerInst] = []string{b.APIOwner}
+	carrier[debugIDInst] = []string{b.DebugID}
+	carrier[preferredLanguageInst] = []string{b.PreferredLanguage}
+	return carrier
+}
+
+// ToOpenTelemetryAttributesMetrics returns open telemetry attributes based on the baggage specifically for metrics.
+// We have a special function for metrics because we don't want to blown up the metrics caridnality because we propagated
+// the request_id and something else that has high cardinality numbers.
+func (b Baggage) ToOpenTelemetryAttributesForMetrics() []attribute.KeyValue {
+	if !b.valid || b.Empty() {
+		return []attribute.KeyValue{}
+	}
+	attrs := []attribute.KeyValue{
+		attribute.String("api.name", b.APIName),
+		attribute.String("api.owner", b.APIOwner),
+	}
+	return attrs
 }
 
 // ToOpenTelemetryAttributes returns open telemetry attributes based on the baggage.

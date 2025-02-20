@@ -5,8 +5,10 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/studio-asd/pkg/instrumentation"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type (
@@ -118,6 +120,9 @@ func (m *Mux) handlerFunc(method, pattern string, handler HandlerFunc) {
 			handler(rwDelegator, r)
 		}),
 		pattern,
+		otelhttp.WithMetricAttributesFn(func(r *http.Request) []attribute.KeyValue {
+			return instrumentation.BaggageFromContext(r.Context()).ToOpenTelemetryAttributesForMetrics()
+		}),
 		otelhttp.WithTracerProvider(otel.GetTracerProvider()),
 		otelhttp.WithMeterProvider(otel.GetMeterProvider()),
 	)

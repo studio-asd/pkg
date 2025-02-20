@@ -1,4 +1,4 @@
-package requestbuilder
+package client
 
 import (
 	"bytes"
@@ -10,6 +10,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/studio-asd/pkg/instrumentation"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // Request store the information to create a http.Request via compile method.
@@ -31,7 +35,7 @@ type Request struct {
 	name string
 }
 
-func New(ctx context.Context) *Request {
+func NewRequestBuilder(ctx context.Context) *Request {
 	r := Request{
 		ctx: ctx,
 	}
@@ -105,7 +109,7 @@ func (r *Request) Query(kv ...string) *Request {
 		return r
 	}
 
-	// VAvoid to create a query that cause panic return the request if kv length is not even.
+	// Avoid to create a query that cause panic return the request if kv length is not even.
 	if len(kv)%2 != 0 {
 		r.err = errors.New(`http-request: query parameters is not even, parameters must be passed in key, value form. For example Query("key", "value")`)
 		return r
@@ -238,27 +242,26 @@ func (r *Request) Compile() (*http.Request, error) {
 	}
 	addURLQuery(u, r.queryKvs...)
 
-	req, err := http.NewRequestWithContext(r.ctx, r.method, u.String(), r.body)
+	// Add opentelemetry instrumentation to the metrics collected by the client.
+	bg := instrumentation.BaggageFromContext(r.ctx)
+	labeler := &otelhttp.Labeler{}
+	labeler.Add(bg.ToOpenTelemetryAttributesForMetrics()...)
+	if r.name != "" {
+		labeler.Add(attribute.String("http_request_name", r.name))
+	}
+	newCtx := otelhttp.ContextWithLabeler(r.ctx, labeler)
+
+	req, err := http.NewRequestWithContext(newCtx, r.method, u.String(), r.body)
 	if err != nil {
 		return nil, err
 	}
 
 	// Inject the instrumentation baggage to the http header for context propagation.
-	// bg := instrumentation.BaggageFromContext(r.ctx)
-	// header := bg.ToHTTPHeader()
-	// if header != nil {
-	// 	// Flag the header that this header is injected with instrumentation. This header is
-	// 	// special to accommodate the header injection in the pkg/http/client.
-	// 	header.Add(httppkg.HeaderInstrumentationInject, "1")
-	// 	r.header = header
-	// }
-
-	// If the request name is not empty, then we should set the http request name so the client
-	// is able to instrument the request later on.
-	if r.name != "" {
-		// Set the baggage http request name with the request builder name.
-		// bg.HTTPRequestName = r.name
-		// req = req.WithContext(instrumentation.WithBaggage(req.Context(), bg))
+	header := bg.ToHTTPHeader()
+	if header != nil {
+		// Flag the header that this header is injected with instrumentation. This header is
+		// special to accommodate the header injection in the pkg/http/client.
+		r.header = header
 	}
 
 	if r.header != nil {

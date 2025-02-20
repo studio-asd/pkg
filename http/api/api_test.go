@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/studio-asd/pkg/http/requestbuilder"
+	"github.com/studio-asd/pkg/http/client"
 )
 
 // func TestSome(t *testing.T) {
@@ -247,7 +247,7 @@ func TestAPIEndpoint(t *testing.T) {
 func BuildRequest(t *testing.T, method, reqURL string, req Request) *http.Request {
 	t.Helper()
 
-	builder := requestbuilder.New(context.Background()).
+	builder := client.NewRequestBuilder(context.Background()).
 		URL(reqURL).
 		Method(method)
 

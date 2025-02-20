@@ -1,4 +1,4 @@
-package requestbuilder
+package client
 
 import (
 	"context"
@@ -39,8 +39,8 @@ func TestCreateRequest(t *testing.T) {
 			},
 		},
 		{
-			"post form http request",
-			func(name, url string, req *Request) {
+			name: "post form http request",
+			constructor: func(name, url string, req *Request) {
 				req.Name(name).
 					Post(url).
 					BodyJSON(map[string]string{
@@ -48,7 +48,7 @@ func TestCreateRequest(t *testing.T) {
 						"key2": "value2",
 					})
 			},
-			func(t *testing.T) http.Handler {
+			handler: func(t *testing.T) http.Handler {
 				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if r.Method != http.MethodPost {
 						t.Fatalf("expecting method POST but got %s", r.Method)
@@ -81,7 +81,7 @@ func TestCreateRequest(t *testing.T) {
 			server := httptest.NewServer(handler)
 			defer server.Close()
 
-			req := New(context.Background())
+			req := NewRequestBuilder(context.Background())
 			test.constructor(test.name, server.URL, req)
 
 			httpreq, err := req.Compile()

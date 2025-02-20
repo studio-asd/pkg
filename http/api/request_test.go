@@ -13,7 +13,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/studio-asd/pkg/http/requestbuilder"
+	"github.com/studio-asd/pkg/http/client"
 )
 
 func TestSetPathParamsValue(t *testing.T) {
@@ -150,7 +150,7 @@ func TestReadURLEncodedParams(t *testing.T) {
 			request: func(t *testing.T) *http.Request {
 				t.Helper()
 
-				req, err := requestbuilder.New(context.Background()).
+				req, err := client.NewRequestBuilder(context.Background()).
 					Post("http://localhost").
 					PostForm("key1", "value1", "key2", "value2").
 					Compile()
@@ -270,7 +270,7 @@ func TestMultipleRequestTypes(t *testing.T) {
 	}
 
 	baseURL := fmt.Sprintf("http://%s/v1/param_1/param_2", listener.Addr().String())
-	req, err := requestbuilder.New(context.Background()).
+	req, err := client.NewRequestBuilder(context.Background()).
 		Method(http.MethodPut).
 		URL(baseURL).
 		BodyJSON(`{"body": "hello"}`).
