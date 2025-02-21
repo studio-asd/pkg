@@ -44,7 +44,8 @@ type ConnectConfig struct {
 	ConnMaxLifetime time.Duration
 	// TracerConfig holds the tracer configuration along with otel tracer inside it.
 	TracerConfig TracerConfig
-	MeterConfig  MeterConfig
+	// MeterConfig holds the meter configuration along with otel meter inside it.
+	MeterConfig MeterConfig
 }
 
 func (c *ConnectConfig) validate() error {
@@ -95,11 +96,16 @@ func (c *ConnectConfig) validate() error {
 	if err := c.MeterConfig.validate(); err != nil {
 		return err
 	}
-	// Inject the information to the tracer configuration as we want to inject these information
-	// when create spans.
+	// Inject the information to both tracer and meter configuration as we want to inject these information
+	// when creating spans and metrics.
+	// Tracer.
 	c.TracerConfig.host = c.Host
 	c.TracerConfig.user = c.Username
 	c.TracerConfig.database = c.DBName
+	// Meter.
+	c.MeterConfig.host = c.Host
+	c.MeterConfig.user = c.Username
+	c.MeterConfig.database = c.DBName
 	return nil
 }
 
@@ -174,8 +180,14 @@ func (t *TracerConfig) traceAttributesFromContext(ctx context.Context, query str
 
 type MeterConfig struct {
 	// MonitorStats enable PostgreSQL stats monitoring in the background. The stats will be collected for every 30 seconds.
-	MonitorStats bool
-	Meter        metric.Meter
+	MonitorStats      bool
+	Meter             metric.Meter
+	DefaultAttributes []attribute.KeyValue
+	//
+	// below configurations are injected to enrich the meter atrrbutes.
+	host     string
+	database string
+	user     string
 }
 
 func (m *MeterConfig) validate() error {
@@ -183,4 +195,28 @@ func (m *MeterConfig) validate() error {
 		m.Meter = otel.GetMeterProvider().Meter("postgres")
 	}
 	return nil
+}
+
+func (m *MeterConfig) metricsAttributes() []attribute.KeyValue {
+	// initial informations about the configuration and connection attributes.
+	attrs := []attribute.KeyValue{
+		attribute.String("postgres.config.host", m.host),
+		attribute.String("postgres.config.database", m.database),
+		attribute.String("postgres.config.user", m.user),
+	}
+	// Append the default attributes if we have it.
+	if len(m.DefaultAttributes) > 0 {
+		attrs = append(attrs, m.DefaultAttributes...)
+	}
+	return attrs
+}
+
+// traceAttributesFromcontext returns the trace attributes from context, query and the query arguments.
+func (m *MeterConfig) metricAttributesFromContext(ctx context.Context) []attribute.KeyValue {
+	attrs := instrumentation.BaggageFromContext(ctx).ToOpenTelemetryAttributesForMetrics()
+	ta := m.metricsAttributes()
+	if len(ta) > 0 {
+		attrs = append(attrs, ta...)
+	}
+	return attrs
 }

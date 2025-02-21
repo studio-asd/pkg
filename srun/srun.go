@@ -500,6 +500,10 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 	// the test config function then exit.
 	if r.flags.TestConfig() {
 		r.logger.Info("program is running in test configuration mode, triggering the test function")
+		// Return error if the --test-config flag is defined but the function is not being set.
+		if r.testConfFn == nil {
+			return errors.New("test config function is empty")
+		}
 		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 		defer cancel()
 		if err := r.testConfFn(Context{

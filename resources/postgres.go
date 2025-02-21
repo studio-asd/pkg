@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/studio-asd/pkg/postgres"
+	"go.opentelemetry.io/otel"
 )
 
 var (
@@ -101,13 +102,13 @@ func (sr *postgresResources) close() error {
 }
 
 type PostgresOverrideableConfig struct {
-	ConnMaxLifetime Duration `yaml:"conn-max-lifetime"`
-	ConnMaxIdleTime Duration `yaml:"conn-max-idle-time"`
-	MaxOpenConns    int      `yaml:"max-open-conns"`
-	MaxIdleConns    int      `yaml:"max-idle-conns"`
-	MaxRetry        int      `yaml:"max-retry"`
-	RetryDelay      Duration `yaml:"retry-delay"`
-	Tracer          string   `yaml:"tracer"`
+	ConnMaxLifetime Duration `yaml:"conn_max_lifetime"`
+	ConnMaxIdleTime Duration `yaml:"conn_max_idle-time"`
+	MaxOpenConns    int      `yaml:"max_open_conns"`
+	MaxIdleConns    int      `yaml:"max_idle_conns"`
+	MaxRetry        int      `yaml:"max_retry"`
+	RetryDelay      Duration `yaml:"retry_delay"`
+	MonitorStats    bool     `yaml:"monitor_stats"`
 }
 
 func (soc *PostgresOverrideableConfig) SetDefault() {
@@ -150,8 +151,9 @@ func (soc *PostgresOverrideableConfig) OverrideValue(val PostgresOverrideableCon
 	if soc.RetryDelay == 0 {
 		soc.RetryDelay = val.RetryDelay
 	}
-	if soc.Tracer == "" {
-		soc.Tracer = val.Tracer
+	// Only change the value to true if the parent value is true and child value is false.
+	if soc.MonitorStats != val.MonitorStats && val.MonitorStats {
+		soc.MonitorStats = val.MonitorStats
 	}
 }
 
@@ -181,7 +183,6 @@ func (sc *PostgresResourcesConfig) connect(ctx context.Context) (*postgresResour
 		attrs := []slog.Attr{
 			slog.String("db.name", conn.Name),
 			slog.String("db.driver", conn.Driver),
-			slog.String("db.tracer", conn.Tracer),
 			slog.String("db.primary_dsn", primaryDSN.SafeURL()),
 		}
 
@@ -270,6 +271,13 @@ func (scc *PostgresConnConfig) Connect(ctx context.Context) ([]*postgres.Postgre
 			MaxOpenConns:    scc.PrimaryDB.MaxOpenConns,
 			ConnMaxIdletime: time.Duration(scc.PrimaryDB.ConnMaxIdleTime),
 			ConnMaxLifetime: time.Duration(scc.PrimaryDB.ConnMaxLifetime),
+			TracerConfig: postgres.TracerConfig{
+				Tracer: otel.GetTracerProvider().Tracer("postgres"),
+			},
+			MeterConfig: postgres.MeterConfig{
+				Meter:        otel.GetMeterProvider().Meter("postgres"),
+				MonitorStats: scc.MonitorStats,
+			},
 		},
 	)
 	if err != nil {

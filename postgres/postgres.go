@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -35,6 +36,7 @@ type Postgres struct {
 	// As this configuration will be passed to transactions, etc. Please be awware to not change the values as
 	// it will introduce a race.
 	tracer *TracerConfig
+	meter  *MeterConfig
 
 	db    *sql.DB
 	pgx   *pgxpool.Pool
@@ -49,6 +51,9 @@ type Postgres struct {
 	// closeMu protects closing postgres connection concurrently.
 	closeMu sync.Mutex
 	closed  bool
+	// withMetrics enables the metrics collection in every query
+	withMetrics bool
+	metricsName string
 }
 
 // InTransaction returns whether the postgres object is currently in transaction or not. The information need to be
@@ -128,6 +133,7 @@ func Connect(ctx context.Context, config ConnectConfig) (*Postgres, error) {
 	p := &Postgres{
 		config:          config,
 		tracer:          &config.TracerConfig,
+		meter:           &config.MeterConfig,
 		db:              db,
 		pgx:             pgxdb,
 		searchPath:      config.SearchPath,
@@ -146,21 +152,31 @@ func (p *Postgres) Query(ctx context.Context, query string, params ...any) (*Row
 }
 
 func (p *Postgres) query(ctx context.Context, query string, params ...any) (rc *RowsCompat, err error) {
+	mt := time.Now()
 	spanCtx, span := p.tracer.Tracer.Start(
 		ctx,
 		"postgres.query",
 		trace.WithSpanKind(trace.SpanKindInternal),
 	)
+
 	defer func() {
+		newAttrs := []attribute.KeyValue{
+			attribute.String("postgres_func", "query"),
+		}
 		if err != nil {
 			var code string
 			code, err = tryErrToPostgresError(err, p.IsPgx())
 			span.SetStatus(codes.Error, err.Error())
 			if code != "" {
+				newAttrs = append(newAttrs, attribute.String("postgres_err_code", code))
 				span.SetAttributes(
 					attribute.String("pg.errCode", code),
 				)
 			}
+		}
+
+		if errRecord := p.recordMetrics(ctx, mt, newAttrs); errRecord != nil {
+			err = errors.Join(err, errRecord)
 		}
 		span.End()
 	}()
@@ -207,6 +223,7 @@ func (p *Postgres) RunQuery(ctx context.Context, query string, f func(*RowsCompa
 				)
 			}
 		}
+		// We don't record any  metrics here beucase we invoke p.query which will the record the metrics.
 		span.End()
 	}()
 
@@ -226,13 +243,24 @@ func (p *Postgres) RunQuery(ctx context.Context, query string, f func(*RowsCompa
 	return
 }
 
+// QueryRow retrieve at most one row for a single query.
 func (p *Postgres) QueryRow(ctx context.Context, query string, params ...any) *RowCompat {
+	mt := time.Now()
 	spanCtx, span := p.tracer.Tracer.Start(
 		ctx,
 		"postgres.queryRow",
 		trace.WithSpanKind(trace.SpanKindInternal),
 	)
-	defer span.End()
+
+	defer func() {
+		newAttrs := []attribute.KeyValue{
+			attribute.String("postgres_func", "queryRow"),
+		}
+		// We need to silent the error here because the function signature don't return any error. We can return error if the implementation
+		// of pgx and database/sql is identical. Unfortunately pgx doesn't allowed us to return any error before scanning.
+		_ = p.recordMetrics(ctx, mt, newAttrs)
+		span.End()
+	}()
 
 	if p.tx != nil {
 		span.SetAttributes(p.tx.SpanAttributes()...)
@@ -240,6 +268,8 @@ func (p *Postgres) QueryRow(ctx context.Context, query string, params ...any) *R
 	}
 
 	span.SetAttributes(p.config.TracerConfig.traceAttributesFromContext(ctx, query, params...)...)
+	// The pgx row is different from the database/sql implementation which allows the user to check whether there is
+	// an error without scanning the row.
 	if p.pgx != nil {
 		row := p.pgx.QueryRow(spanCtx, query, params...)
 		return &RowCompat{pgxRow: row}
@@ -249,14 +279,22 @@ func (p *Postgres) QueryRow(ctx context.Context, query string, params ...any) *R
 }
 
 func (p *Postgres) Exec(ctx context.Context, query string, params ...any) (ec *ExecResultCompat, err error) {
+	mt := time.Now()
+
 	spanCtx, span := p.tracer.Tracer.Start(
 		ctx,
 		"postgres.exec",
 		trace.WithSpanKind(trace.SpanKindInternal),
 	)
 	defer func() {
+		newAttrs := []attribute.KeyValue{
+			attribute.String("postgres_func", "exec"),
+		}
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
+		}
+		if errRecord := p.recordMetrics(ctx, mt, newAttrs); errRecord != nil {
+			err = errors.Join(err, errRecord)
 		}
 		span.End()
 	}()
@@ -361,21 +399,29 @@ func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc 
 		return errors.New("a DB Transact function was called on a DB already in a transaction")
 	}
 
+	mt := time.Now()
 	spanCtx, span := p.tracer.Tracer.Start(
 		ctx,
 		"postgres.transact",
 		trace.WithSpanKind(trace.SpanKindInternal),
 	)
 	defer func() {
+		newAttrs := []attribute.KeyValue{
+			attribute.String("postgres_func", "transact"),
+		}
 		if err != nil {
 			var code string
 			code, err = tryErrToPostgresError(err, p.IsPgx())
 			span.SetStatus(codes.Error, err.Error())
 			if code != "" {
+				newAttrs = append(newAttrs, attribute.String("postgres_err_code", code))
 				span.SetAttributes(
 					attribute.String("pg.errCode", code),
 				)
 			}
+		}
+		if errRecord := p.recordMetrics(ctx, mt, newAttrs); errRecord != nil {
+			err = errors.Join(err, errRecord)
 		}
 		span.End()
 	}()
@@ -426,21 +472,30 @@ func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc 
 }
 
 func (p *Postgres) Prepare(ctx context.Context, query string) (sc *StmtCompat, err error) {
+	mt := time.Now()
 	spanCtx, span := p.tracer.Tracer.Start(
 		ctx,
 		"postgres.prepare",
 		trace.WithSpanKind(trace.SpanKindInternal),
 	)
+
 	defer func() {
+		newAttrs := []attribute.KeyValue{
+			attribute.String("postgres_func", "prepare"),
+		}
 		if err != nil {
 			var code string
 			code, err = tryErrToPostgresError(err, p.IsPgx())
 			span.SetStatus(codes.Error, err.Error())
 			if code != "" {
+				newAttrs = append(newAttrs, attribute.String("postgres_err_code", code))
 				span.SetAttributes(
 					attribute.String("pg.errCode", code),
 				)
 			}
+		}
+		if errRecord := p.recordMetrics(ctx, mt, newAttrs); errRecord != nil {
+			err = errors.Join(err, errRecord)
 		}
 		span.End()
 	}()
@@ -595,4 +650,37 @@ func monitorPostgresStats(ctx context.Context, p *Postgres) error {
 			}
 		}
 	}
+}
+
+// WithMetrics records the duration of function execution inside the fn.
+func (p *Postgres) WithMetrics(ctx context.Context, name string, fn func(context.Context, *Postgres) error) (err error) {
+	if name == "" {
+		return errors.New("name cannot be empty to collect metrics")
+	}
+
+	pg := &Postgres{
+		tracer:      p.tracer,
+		db:          p.db,
+		pgx:         p.pgx,
+		tx:          p.tx,
+		txIso:       p.txIso,
+		metricsName: name,
+	}
+	return fn(ctx, pg)
+}
+
+func (p *Postgres) recordMetrics(ctx context.Context, t time.Time, attributes []attribute.KeyValue) error {
+	if p.metricsName == "" {
+		return nil
+	}
+	attrs := p.meter.metricAttributesFromContext(ctx)
+	if len(attributes) > 0 {
+		attrs = append(attrs, attributes...)
+	}
+	histogram, err := p.meter.Meter.Float64Histogram(p.metricsName)
+	if err != nil {
+		return err
+	}
+	histogram.Record(ctx, time.Since(t).Seconds(), metric.WithAttributes(attrs...))
+	return nil
 }
