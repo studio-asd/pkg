@@ -43,7 +43,7 @@ func (s *Server) RegisterService(fn func(s grpc.ServiceRegistrar)) {
 }
 
 func (s *Server) Init(ctx srun.Context) error {
-	s.stateHelper = ctx.StateHelper
+	s.stateHelper = ctx.NewStateHelper("grpc-server")
 	listener, err := net.Listen("tcp", s.config.Address)
 	if err != nil {
 		return err

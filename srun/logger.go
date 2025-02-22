@@ -22,6 +22,11 @@ type LoggerConfig struct {
 	Level      slog.Level
 	// Output overrides and control the output of the program log. By default, all logs will be sent to os.Stderr.
 	Output io.Writer
+
+	// Below information is injected inside the library.
+	appName    string
+	appVersion string
+	goVersion  string
 }
 
 func (l *LoggerConfig) Validate() error {
@@ -93,5 +98,10 @@ func setDefaultSlog(config LoggerConfig) {
 			},
 		)
 	}
-	slog.SetDefault(slog.New(handler))
+	logger := slog.New(handler).With(
+		slog.String("app_name", config.appName),
+		slog.String("app_version", config.appVersion),
+		slog.String("go_version", config.goVersion),
+	)
+	slog.SetDefault(logger)
 }

@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 
+	"github.com/grpc-ecosystem/grpc-gateway/runtime"
 	"google.golang.org/grpc"
 
 	"github.com/studio-asd/pkg/grpc/client"
@@ -22,6 +24,7 @@ func newGRPCResources() *grpcResources {
 
 type grpcResources struct {
 	clientResources *grpcClientResources
+	severResources  *grpcServerResources
 }
 
 type grpcClientResources struct {
@@ -56,8 +59,18 @@ func (g *grpcClientResources) close() error {
 	return errs
 }
 
+type grpcServerResources struct {
+	mu      sync.Mutex
+	servers map[string]*grpc.Server
+}
+
+type grpcGatewayResources struct {
+	mu sync.Mutex
+}
+
 type GRPCResourcesConfig struct {
 	logger          *slog.Logger
+	ServerResources []GRPCServerResourceConfig `yaml:"servers"`
 	ClientResources []GRPCClientResourceConfig `yaml:"clients"`
 }
 
@@ -123,4 +136,29 @@ func (g *GRPCClientResourceConfig) Connect() (*grpc.ClientConn, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+type GRPCServerResourceConfig struct {
+	Name         string   `yaml:"name"`
+	Address      string   `yaml:"address"`
+	ReadTimeout  Duration `yaml:"read_timeout"`
+	WriteTimeout Duration `yaml:"write_timeout"`
+	// GRPCGateway configuration allows the grpc server to be proxied through http server as long as the
+	// endpoint supports grpc gateway.
+	//
+	// Read https://github.com/grpc-ecosystem/grpc-gateway to know more about grpc gateway.
+	GRPCGateway GRPCGatewayResourceConfig `yaml:"grpc_gateway"`
+}
+
+func (g *GRPCServerResourceConfig) connect() {
+
+}
+
+type GRPCGatewayResourceConfig struct {
+	Addres string
+}
+
+type GRPCGatewayObject struct {
+	servicesHandlerFn func(ctx context.Context, mux *runtime.ServeMux, endpoint string, opts []grpc.DialOption) (err error)
+	httpServer        *http.Server
 }

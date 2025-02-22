@@ -24,9 +24,9 @@ type OTelTracerConfig struct {
 	Disable bool
 	// Below is a private configuration passed from the srun itself to provide several information
 	// for the open-telemetry.
-	serviceName    string
-	serviceVersion string
-	goVersion      string
+	appName    string
+	appVersion string
+	goVersion  string
 }
 
 // newOTelTracerService returns a function to trigger and starts open telemetry processes. The function returns a function to allow us to use
@@ -41,8 +41,8 @@ func newOTelTracerService(config OTelTracerConfig) (trace.Tracer, *LongRunningTa
 		resource.Default(),
 		resource.NewWithAttributes(
 			semconv.SchemaURL,
-			semconv.ServiceName(config.serviceName),
-			semconv.ServiceVersion(config.serviceVersion),
+			semconv.ServiceName(config.appName),
+			semconv.ServiceVersion(config.appVersion),
 			attribute.String("go.version", config.goVersion),
 		),
 	)
@@ -65,7 +65,7 @@ func newOTelTracerService(config OTelTracerConfig) (trace.Tracer, *LongRunningTa
 	)
 	// Set a global trace provider so it can be used elsewhere in the program.
 	otel.SetTracerProvider(provider)
-	tracer := provider.Tracer(config.serviceName)
+	tracer := provider.Tracer(config.appName)
 
 	fn := func(ctx Context) error {
 		// Wait until the context is cancalled to shutdown the provider.
@@ -96,9 +96,9 @@ type OtelMetricConfig struct {
 	MeterName string
 	// Below is a private configuration passed from the srun itself to provide several information
 	// for the open-telemetry.
-	serviceName    string
-	serviceVersion string
-	goVersion      string
+	appName    string
+	appVersion string
+	goVersion  string
 }
 
 // newOtelMetricsMeterAndProviderService returns open telemetry meter and provider so we can use them inside the runner and inject it to the Context.
@@ -112,8 +112,8 @@ func newOtelMetricMeterAndProviderService(config OtelMetricConfig) (metric.Meter
 		resource.Default(),
 		resource.NewWithAttributes(
 			semconv.SchemaURL,
-			semconv.ServiceName(config.serviceName),
-			semconv.ServiceVersion(config.serviceVersion),
+			semconv.ServiceName(config.appName),
+			semconv.ServiceVersion(config.appVersion),
 			attribute.String("go_version", config.goVersion),
 		),
 	)

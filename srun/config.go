@@ -3,6 +3,7 @@ package srun
 import (
 	"errors"
 	"os"
+	"runtime"
 	"time"
 )
 
@@ -52,6 +53,19 @@ func (c *Config) Validate() error {
 	if err := c.Logger.Validate(); err != nil {
 		return err
 	}
+	goVersion := runtime.Version()
+	// Inject additonal information to the logger for the log fields.
+	c.Logger.appName = c.Name
+	c.Logger.appVersion = c.Version
+	c.Logger.goVersion = goVersion
+	// Inject information to the otel trace configuration
+	c.OtelTracer.appName = c.Name
+	c.OtelTracer.appVersion = c.Version
+	c.OtelTracer.goVersion = goVersion
+	// Inject information to the otel metric configuration
+	c.OtelMetric.appName = c.Name
+	c.OtelMetric.appVersion = c.Version
+	c.OtelMetric.goVersion = goVersion
 
 	// Respect the configuration from environment variable if available.
 	envReadyTimeout := os.Getenv("SRUN_READY_TIMEOUT")

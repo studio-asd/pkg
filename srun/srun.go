@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"runtime"
 	"runtime/debug"
 	"sync"
 	"syscall"
@@ -134,7 +133,6 @@ type Context struct {
 	RunnerAppName    string
 	RunnerAppVersion string
 	Ctx              context.Context
-	StateHelper      *StateHelper
 	Logger           *slog.Logger
 	// Meter is open telemetry metric meter object to record metrics via open telemetry provider. The provider exports the metric
 	// via prometheus exporter.
@@ -148,6 +146,13 @@ type Context struct {
 	// letting them to blast notification doesn't seems meaningful.
 	HealthNotifier *HealthcheckNotifier
 	Flags          *Flags
+}
+
+// NewStateHelper returns a new state helper that can help the service to maintain its own state.
+func (c *Context) NewStateHelper(name string) *StateHelper {
+	return &StateHelper{
+		serivceName: name,
+	}
 }
 
 type Service interface {
@@ -266,6 +271,7 @@ func newRegistrar(r *Runner) *Registrar {
 			Logger: slog.Default().With(slog.String("logger_scope", r.config.Name)),
 			Meter:  r.otelMeter,
 			Tracer: r.otelTracer,
+			Flags:  r.flags,
 		},
 	}
 }
@@ -331,6 +337,7 @@ func New(config Config) *Runner {
 	if err := conf.Validate(); err != nil {
 		panic(err)
 	}
+
 	setDefaultSlog(conf.Logger)
 
 	f := newFlags()
@@ -346,10 +353,9 @@ func New(config Config) *Runner {
 	}
 
 	var (
-		upg       *upgrader
-		err       error
-		ctx       = context.Background()
-		goVersion = runtime.Version()
+		upg *upgrader
+		err error
+		ctx = context.Background()
 	)
 
 	if config.Upgrader.SelfUpgrade {
@@ -362,14 +368,6 @@ func New(config Config) *Runner {
 		// also exit.
 		ctx = upg.Context()
 	}
-	// Inject information to the otel metric configuration
-	config.OtelMetric.serviceName = config.Name
-	config.OtelMetric.serviceVersion = config.Version
-	config.OtelMetric.goVersion = goVersion
-	// Inject information to the otel trace configuration
-	config.OtelTracer.serviceName = config.Name
-	config.OtelTracer.serviceVersion = config.Version
-	config.OtelTracer.goVersion = goVersion
 
 	meter, meterLrt, err := newOtelMetricMeterAndProviderService(config.OtelMetric)
 	if err != nil {
@@ -507,12 +505,8 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 		defer cancel()
 		if err := r.testConfFn(Context{
-			RunnerAppName: r.config.Name,
-			Ctx:           timeoutCtx,
-			StateHelper: &StateHelper{
-				serivceName: "test-config",
-				state:       int(serviceStateStopped),
-			},
+			RunnerAppName:  r.config.Name,
+			Ctx:            timeoutCtx,
 			Logger:         r.logger,
 			Meter:          r.otelMeter,
 			Tracer:         r.otelTracer,
@@ -621,10 +615,6 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 			initContext := Context{
 				RunnerAppName: r.config.Name,
 				Ctx:           initCtx,
-				StateHelper: &StateHelper{
-					serivceName: service.Name(),
-					state:       int(serviceStateStopped),
-				},
 				// Assign a new logger from the default logger(we have configured this before), so each logger will have default attributes
 				// called 'logger_scope' to tell the scope of the logger.
 				Logger:         slog.Default().With(slog.String("logger_scope", svc.Name())),

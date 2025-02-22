@@ -16,19 +16,30 @@ var _ srun.ServiceRunnerAware = (*Resources)(nil)
 
 type Config struct {
 	Postgres *PostgresResourcesConfig `yaml:"postgres"`
+	Redis    *RedisResourcesConfig    `yaml:"redis"`
 	GRPC     *GRPCResourcesConfig     `yaml:"grpc"`
 }
 
 func (c Config) Validate() error {
+	// nonil flags that at least one(1) configurations is not empty. Please set the nonil to true for every time
+	// we check a configuration.
+	var nonil bool
+
 	if c.Postgres != nil {
+		nonil = true
 		if err := c.Postgres.Validate(); err != nil {
 			return err
 		}
 	}
 	if c.GRPC != nil {
+		nonil = true
 		if err := c.GRPC.Validate(); err != nil {
 			return err
 		}
+	}
+
+	if !nonil {
+		return errors.New("resources: empty configuration")
 	}
 	return nil
 }
@@ -39,11 +50,15 @@ type Resources struct {
 	// OpenTelemetry tracer and metric meter.
 	tracer trace.Tracer
 	meter  metric.Meter
+	// container stores all the resources defined in this library.
+	container *ResourcesContainer
 
 	mu      sync.Mutex
 	running bool
 	stopC   chan struct{}
+}
 
+type ResourcesContainer struct {
 	// PostgreSQL connections.
 	postrgres *postgresResources
 	// GRPC client connections.
@@ -55,10 +70,17 @@ func New(ctx context.Context, config Config) (*Resources, error) {
 		return nil, err
 	}
 	r := &Resources{
-		config: config,
-		stopC:  make(chan struct{}, 1),
+		config:    config,
+		stopC:     make(chan struct{}, 1),
+		container: &ResourcesContainer{},
 	}
 	return r, nil
+}
+
+// Container returns the resources container that contains all the available/connected resources. Please note that
+// all resources are only available after Run() is invoked.
+func (r *Resources) Container() *ResourcesContainer {
+	return r.container
 }
 
 func (r *Resources) Name() string {
@@ -70,8 +92,12 @@ func (r *Resources) Init(ctx srun.Context) error {
 	r.tracer = ctx.Tracer
 	r.meter = ctx.Meter
 	// Inject the logger for all the resources.
-	r.config.Postgres.logger = r.logger
-	r.config.GRPC.logger = r.logger
+	if r.config.Postgres != nil {
+		r.config.Postgres.logger = r.logger
+	}
+	if r.config.GRPC != nil {
+		r.config.GRPC.logger = r.logger
+	}
 	return nil
 }
 
@@ -107,15 +133,15 @@ func (r *Resources) Stop(ctx context.Context) error {
 	}
 
 	var errs error
-	if r.postrgres != nil {
+	if r.container.postrgres != nil {
 		r.logger.Info("[resources] closing all PostgreSQL connections")
-		if err := r.postrgres.close(); err != nil {
+		if err := r.container.postrgres.close(); err != nil {
 			errs = errors.Join(errs, err)
 		}
 	}
-	if r.grpc != nil {
+	if r.container.grpc != nil {
 		r.logger.Info("[resources] closing all gRPC connections")
-		if err := r.grpc.clientResources.close(); err != nil {
+		if err := r.container.grpc.clientResources.close(); err != nil {
 			errs = errors.Join(errs, err)
 		}
 	}
@@ -140,7 +166,7 @@ func (r *Resources) run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		r.postrgres = pgResources
+		r.container.postrgres = pgResources
 	}
 	// GRPC.
 	if r.config.GRPC != nil {
@@ -155,7 +181,7 @@ func (r *Resources) run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		r.grpc = grpcResources
+		r.container.grpc = grpcResources
 	}
 	return nil
 }
