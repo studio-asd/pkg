@@ -31,7 +31,13 @@ type Server struct {
 	server   *grpc.Server
 }
 
-func New() {
+func New(config Config) (*Server, error) {
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	return &Server{
+		config: config,
+	}, nil
 }
 
 func (s *Server) Name() string {
@@ -51,12 +57,9 @@ func (s *Server) Init(ctx srun.Context) error {
 	s.listener = listener
 	s.logger = ctx.Logger
 
-	metricAttrs := []attribute.KeyValue{
-		attribute.String("service_name", ctx.RunnerAppName),
-		attribute.String("service_version", ctx.RunnerAppVersion),
-	}
+	var metricAttrs []attribute.KeyValue
 	if s.config.Meter.DefaultAttributes != nil {
-		metricAttrs = append(metricAttrs, s.config.Meter.DefaultAttributes...)
+		metricAttrs = s.config.Meter.DefaultAttributes
 	}
 
 	otelServerOption := opentelemetry.ServerOption(opentelemetry.Options{

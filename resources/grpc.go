@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/studio-asd/pkg/grpc/client"
+	grpcserver "github.com/studio-asd/pkg/grpc/server"
 )
 
 func newGRPCResources() *grpcResources {
@@ -150,12 +151,14 @@ type GRPCServerResourceConfig struct {
 	GRPCGateway GRPCGatewayResourceConfig `yaml:"grpc_gateway"`
 }
 
-func (g *GRPCServerResourceConfig) connect() {
-
+func (g *GRPCServerResourceConfig) create() {
+	grpcserver.New(grpcserver.Config{
+		Address: g.Address,
+	})
 }
 
 type GRPCGatewayResourceConfig struct {
-	Addres string
+	Addres string `yaml:"address"`
 }
 
 type GRPCGatewayObject struct {

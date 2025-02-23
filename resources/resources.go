@@ -77,6 +77,13 @@ func New(ctx context.Context, config Config) (*Resources, error) {
 	return r, nil
 }
 
+// init initiates some of the resources that need to be created before the object is registered to the srun. This is because
+// some of the resources might be needed in the time of initialization. For example, both HTTP and gRPC servers need handler
+// to works. In order to be able to retrieve them after New() is called, then we need to create the resources upfront.
+func (r *Resources) init() {
+
+}
+
 // Container returns the resources container that contains all the available/connected resources. Please note that
 // all resources are only available after Run() is invoked.
 func (r *Resources) Container() *ResourcesContainer {

@@ -485,9 +485,15 @@ func (r *Runner) registerDefaultServices(otelTracerProvider, otelMeterProvider *
 	return err
 }
 
-// Run runs the run function that register services in the main function.
+// Run runs the run function that register services in the main function. The run function should not block, otherwise  the runner can't
+// execute other services that registered in the runner.
 //
-// Please NOTE that the run function should not block, otherwise  the runner can't execute other services that registered in the runner.
+// The order of the executions are:
+// 1. Check all flags.
+// 2. Invoke run() function in the parameter.
+// 3. Init ALL services.
+// 4. Run, check ready and wait for ALL services to exit.
+// 5. Stop ALL services.
 func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) (returnedErr error) {
 	r.logger.Info(fmt.Sprintf("Running program: %s", r.serviceName))
 	var (
@@ -519,6 +525,7 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 	}
 
 	// Set the state of the service runner to run/not running and catch panic to enrich the error.
+	// TODO(albert): ensure all dependencies are stopped in case of panic.
 	defer func() {
 		var stackTrace []byte
 		v := recover()
@@ -588,6 +595,13 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 		return nil
 	}
 
+	// Init all services first as we want to ensure that services can be initialized before it runs. The order
+	// of initialization follows the FIFO order to ensure we respect the orders of registered services.
+	err := r.initServices(ctxSignal)
+	if err != nil {
+		return err
+	}
+
 	var runnerAwareSvcCount int
 	runErrC := make(chan error, len(r.services))
 	// Start the service with FIFO, as we want to ensure the service at the bottom of the stack will be always
@@ -608,36 +622,6 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 		if ctxSignal.Err() != nil {
 			returnedErr = ctxSignal.Err()
 			return
-		}
-		// Init the service.
-		initCtx, cancel := context.WithTimeout(ctxSignal, r.config.Timeout.InitTimeout)
-		go func() {
-			initContext := Context{
-				RunnerAppName: r.config.Name,
-				Ctx:           initCtx,
-				// Assign a new logger from the default logger(we have configured this before), so each logger will have default attributes
-				// called 'logger_scope' to tell the scope of the logger.
-				Logger:         slog.Default().With(slog.String("logger_scope", svc.Name())),
-				Meter:          otel.GetMeterProvider().Meter(service.Name()),
-				Tracer:         otel.GetTracerProvider().Tracer(service.Name()),
-				HealthNotifier: &HealthcheckNotifier{noop: true},
-				Flags:          r.flags,
-			}
-			if r.healthcheckService != nil {
-				initContext.HealthNotifier = r.healthcheckService.notifiers[svc]
-			}
-			err := svc.Init(initContext)
-			runErrC <- err
-		}()
-		select {
-		case <-initCtx.Done():
-			cancel()
-			return errServiceInitTimeout
-		case err := <-runErrC:
-			cancel()
-			if err != nil {
-				return err
-			}
 		}
 
 		// Check wether we have a ServiceRunnerAware or not, otherwise we don't have to invoke the following functions to run the
@@ -792,6 +776,44 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 		}
 		return
 	}
+}
+
+func (r *Runner) initServices(ctxSignal context.Context) error {
+	errC := make(chan error, 1)
+	for _, service := range r.services {
+		svc := service
+		// Init the service.
+		initCtx, cancel := context.WithTimeout(ctxSignal, r.config.Timeout.InitTimeout)
+		go func() {
+			initContext := Context{
+				RunnerAppName: r.config.Name,
+				Ctx:           initCtx,
+				// Assign a new logger from the default logger(we have configured this before), so each logger will have default attributes
+				// called 'logger_scope' to tell the scope of the logger.
+				Logger:         slog.Default().With(slog.String("logger_scope", svc.Name())),
+				Meter:          otel.GetMeterProvider().Meter(service.Name()),
+				Tracer:         otel.GetTracerProvider().Tracer(service.Name()),
+				HealthNotifier: &HealthcheckNotifier{noop: true},
+				Flags:          r.flags,
+			}
+			if r.healthcheckService != nil {
+				initContext.HealthNotifier = r.healthcheckService.notifiers[svc]
+			}
+			err := svc.Init(initContext)
+			errC <- err
+		}()
+		select {
+		case <-initCtx.Done():
+			cancel()
+			return errServiceInitTimeout
+		case err := <-errC:
+			cancel()
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // MustRun exit the program using os.Exit when it stops. The function determine the error using the internal isError
