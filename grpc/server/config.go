@@ -3,11 +3,10 @@ package server
 import (
 	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	meternoop "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/trace"
-	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
 
 const (
@@ -19,9 +18,8 @@ type Config struct {
 	Address      string
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
-	// Below configurations will automatically applied to the grpc gateway as well.
-	Trace *TraceConfig
-	Meter *MeterConfig
+	Trace        *TraceConfig
+	Meter        *MeterConfig
 }
 
 func (c *Config) Validate() error {
@@ -34,8 +32,7 @@ func (c *Config) Validate() error {
 
 	if c.Trace == nil {
 		c.Trace = &TraceConfig{
-			// Use a noop trace provider as the default trace configuration.
-			Tracer: tracenoop.NewTracerProvider().Tracer("noop"),
+			Tracer: otel.GetTracerProvider().Tracer("grpc_server"),
 		}
 	}
 	if err := c.Trace.Validate(); err != nil {
@@ -43,7 +40,7 @@ func (c *Config) Validate() error {
 	}
 	if c.Meter == nil {
 		c.Meter = &MeterConfig{
-			Meter: meternoop.NewMeterProvider().Meter("noop"),
+			Meter: otel.GetMeterProvider().Meter("grpc_server"),
 		}
 	}
 	if err := c.Meter.Validate(); err != nil {

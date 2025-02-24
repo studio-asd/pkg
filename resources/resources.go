@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"sync"
 
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
@@ -20,7 +19,7 @@ type Config struct {
 	GRPC     *GRPCResourcesConfig     `yaml:"grpc"`
 }
 
-func (c Config) Validate() error {
+func (c *Config) Validate() error {
 	// nonil flags that at least one(1) configurations is not empty. Please set the nonil to true for every time
 	// we check a configuration.
 	var nonil bool
@@ -53,9 +52,8 @@ type Resources struct {
 	// container stores all the resources defined in this library.
 	container *ResourcesContainer
 
-	mu      sync.Mutex
-	running bool
-	stopC   chan struct{}
+	stateHelper *srun.StateHelper
+	stopC       chan struct{}
 }
 
 type ResourcesContainer struct {
@@ -77,13 +75,6 @@ func New(ctx context.Context, config Config) (*Resources, error) {
 	return r, nil
 }
 
-// init initiates some of the resources that need to be created before the object is registered to the srun. This is because
-// some of the resources might be needed in the time of initialization. For example, both HTTP and gRPC servers need handler
-// to works. In order to be able to retrieve them after New() is called, then we need to create the resources upfront.
-func (r *Resources) init() {
-
-}
-
 // Container returns the resources container that contains all the available/connected resources. Please note that
 // all resources are only available after Run() is invoked.
 func (r *Resources) Container() *ResourcesContainer {
@@ -98,6 +89,16 @@ func (r *Resources) Init(ctx srun.Context) error {
 	r.logger = ctx.Logger
 	r.tracer = ctx.Tracer
 	r.meter = ctx.Meter
+
+	if r.stateHelper == nil {
+		r.stateHelper = ctx.NewStateHelper("resources")
+		r.stateHelper.SetInitiated()
+	}
+	// Don't re-init because we don't want to reconnect to all dependencies all over again.
+	if r.stateHelper.IsInitiated() {
+		return nil
+	}
+
 	// Inject the logger for all the resources.
 	if r.config.Postgres != nil {
 		r.config.Postgres.logger = r.logger
@@ -105,37 +106,33 @@ func (r *Resources) Init(ctx srun.Context) error {
 	if r.config.GRPC != nil {
 		r.config.GRPC.logger = r.logger
 	}
+
+	if err := r.init(ctx.Ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
 func (r *Resources) Run(ctx context.Context) error {
-	r.mu.Lock()
-	if r.running {
-		r.mu.Unlock()
+	if r.stateHelper.IsRunning() {
 		return nil
 	}
-	r.running = true
-	r.mu.Unlock()
+	r.stateHelper.SetRunning()
 
-	err := r.run(ctx)
 	<-r.stopC
-	return err
+	return nil
 }
 
 func (r *Resources) Ready(ctx context.Context) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !r.running {
+	if !r.stateHelper.IsRunning() {
 		return errors.New("the resources are stopped")
 	}
 	return nil
 }
 
 func (r *Resources) Stop(ctx context.Context) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	// Early return when the resources is not currently running.
-	if !r.running {
+	if r.stateHelper.IsStopped() {
 		return nil
 	}
 
@@ -152,17 +149,14 @@ func (r *Resources) Stop(ctx context.Context) error {
 			errs = errors.Join(errs, err)
 		}
 	}
-	// Change the state from running to stopped.
-	r.running = false
 	r.stopC <- struct{}{}
 	return errs
 }
 
-func (r *Resources) run(ctx context.Context) error {
-	r.mu.Lock()
-	r.running = true
-	defer r.mu.Unlock()
-
+// init initiates some of the resources that need to be created before the object is registered to the srun. This is because
+// some of the resources might be needed in the time of initialization. For example, both HTTP and gRPC servers need handler
+// to works. Other thing is, databases and other objects that needed in Init phase are also need to be initiateed.
+func (r *Resources) init(ctx context.Context) error {
 	// PostgreSQL.
 	if r.config.Postgres != nil {
 		r.logger.Info(
@@ -177,17 +171,31 @@ func (r *Resources) run(ctx context.Context) error {
 	}
 	// GRPC.
 	if r.config.GRPC != nil {
+		grpcResources := newGRPCResources()
+
 		// GRPC Clients.
 		if len(r.config.GRPC.ClientResources) > 0 {
 			r.logger.Info(
 				"[resources] Found grpc clients configuration, establishing connection to gRPC endpoints...",
 				slog.Int("grpc_clients_config_count", len(r.config.GRPC.ClientResources)),
 			)
+			err := r.config.GRPC.connectGRPCClients(ctx, grpcResources)
+			if err != nil {
+				return err
+			}
 		}
-		grpcResources, err := r.config.GRPC.connect(ctx)
-		if err != nil {
-			return err
+		// GRPC Servers.
+		if len(r.config.GRPC.ServerResources) > 0 {
+			r.logger.Info(
+				"[resources] Found grpc servers configuration, creating gRPC servers...",
+				slog.Int("grpc_servers_config", len(r.config.GRPC.ServerResources)),
+			)
+			err := r.config.GRPC.createGRPCServers(ctx, grpcResources)
+			if err != nil {
+				return err
+			}
 		}
+
 		r.container.grpc = grpcResources
 	}
 	return nil

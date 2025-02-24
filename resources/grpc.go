@@ -5,14 +5,20 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"sync"
+	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/runtime"
 	"google.golang.org/grpc"
 
 	"github.com/studio-asd/pkg/grpc/client"
 	grpcserver "github.com/studio-asd/pkg/grpc/server"
+	httpserver "github.com/studio-asd/pkg/http/server"
+)
+
+const (
+	defaultGRPCServerReadTimeout  = time.Second * 30
+	defaultGRPCServerWriteTimeout = time.Second * 20
 )
 
 func newGRPCResources() *grpcResources {
@@ -24,8 +30,9 @@ func newGRPCResources() *grpcResources {
 }
 
 type grpcResources struct {
-	clientResources *grpcClientResources
-	severResources  *grpcServerResources
+	clientResources  *grpcClientResources
+	severResources   *grpcServerResources
+	gatewayResources *grpcGatewayResources
 }
 
 type grpcClientResources struct {
@@ -62,7 +69,23 @@ func (g *grpcClientResources) close() error {
 
 type grpcServerResources struct {
 	mu      sync.Mutex
-	servers map[string]*grpc.Server
+	servers map[string]*grpcserver.Server
+}
+
+func (g *grpcServerResources) setServer(name string, server *grpcserver.Server) {
+	g.mu.Lock()
+	g.servers[name] = server
+	g.mu.Unlock()
+}
+
+func (g *grpcServerResources) getServer(name string) (*grpcserver.Server, error) {
+	g.mu.Lock()
+	server, ok := g.servers[name]
+	g.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("grpc_server: server with name %s does not exist", name)
+	}
+	return server, nil
 }
 
 type grpcGatewayResources struct {
@@ -84,8 +107,7 @@ func (g *GRPCResourcesConfig) Validate() error {
 	return nil
 }
 
-func (g *GRPCResourcesConfig) connect(ctx context.Context) (*grpcResources, error) {
-	resources := newGRPCResources()
+func (g *GRPCResourcesConfig) connectGRPCClients(ctx context.Context, resources *grpcResources) error {
 	for _, c := range g.ClientResources {
 		attrs := []slog.Attr{
 			slog.String("client.name", c.Name),
@@ -104,11 +126,11 @@ func (g *GRPCResourcesConfig) connect(ctx context.Context) (*grpcResources, erro
 				"[resources][grpc_clients] failed to connect to GRPC endpoint",
 				attrs...,
 			)
-			return nil, err
+			return err
 		}
 		resources.clientResources.setClient(c.Name, conn)
 	}
-	return resources, nil
+	return nil
 }
 
 type GRPCClientResourceConfig struct {
@@ -139,6 +161,17 @@ func (g *GRPCClientResourceConfig) Connect() (*grpc.ClientConn, error) {
 	return c, nil
 }
 
+func (g *GRPCResourcesConfig) createGRPCServers(ctx context.Context, resources *grpcResources) error {
+	for _, server := range g.ServerResources {
+		s, err := server.create()
+		if err != nil {
+			return err
+		}
+		resources.severResources.setServer(server.Name, s)
+	}
+	return nil
+}
+
 type GRPCServerResourceConfig struct {
 	Name         string   `yaml:"name"`
 	Address      string   `yaml:"address"`
@@ -151,17 +184,66 @@ type GRPCServerResourceConfig struct {
 	GRPCGateway GRPCGatewayResourceConfig `yaml:"grpc_gateway"`
 }
 
-func (g *GRPCServerResourceConfig) create() {
-	grpcserver.New(grpcserver.Config{
-		Address: g.Address,
+func (g *GRPCServerResourceConfig) validate() error {
+	if g.Name == "" {
+		return errors.New("grpc_server: name cannot be empty")
+	}
+	if g.Address == "" {
+		return fmt.Errorf("grpc_server [%s]: address cannot be empty", g.Name)
+	}
+	if g.ReadTimeout == 0 {
+		g.ReadTimeout = Duration(defaultGRPCServerReadTimeout)
+	}
+	if g.WriteTimeout == 0 {
+		g.WriteTimeout = Duration(defaultGRPCServerWriteTimeout)
+	}
+	// Override the write and read timeout according to the write and read timeout of grpc server.
+	if g.GRPCGateway.Addres != "" {
+		g.GRPCGateway.name = g.Name
+		if g.GRPCGateway.writeTimeout == 0 {
+			g.GRPCGateway.writeTimeout = g.WriteTimeout
+		}
+		if g.GRPCGateway.readTimeout == 0 {
+			g.GRPCGateway.readTimeout = g.ReadTimeout
+		}
+	}
+	return nil
+}
+
+func (g *GRPCServerResourceConfig) create() (*grpcserver.Server, error) {
+	server, err := grpcserver.New(grpcserver.Config{
+		Address:      g.Address,
+		WriteTimeout: time.Duration(g.WriteTimeout),
+		ReadTimeout:  time.Duration(g.ReadTimeout),
 	})
+	if err != nil {
+		return nil, err
+	}
+	return server, nil
 }
 
 type GRPCGatewayResourceConfig struct {
-	Addres string `yaml:"address"`
+	Addres       string `yaml:"address"`
+	name         string
+	writeTimeout Duration
+	readTimeout  Duration
 }
 
 type GRPCGatewayObject struct {
 	servicesHandlerFn func(ctx context.Context, mux *runtime.ServeMux, endpoint string, opts []grpc.DialOption) (err error)
-	httpServer        *http.Server
+	httpServer        *httpserver.Server
+}
+
+func (g *GRPCGatewayResourceConfig) create() (*GRPCGatewayObject, error) {
+	s, err := httpserver.New(httpserver.Config{
+		Name:         fmt.Sprintf("%s-grpc-gateway", g.name),
+		WriteTimeout: time.Duration(g.writeTimeout),
+		ReadTimeout:  time.Duration(g.readTimeout),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &GRPCGatewayObject{
+		httpServer: s,
+	}, nil
 }

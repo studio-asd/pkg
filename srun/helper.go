@@ -339,6 +339,12 @@ func (s *StateHelper) ServiceName() string {
 	return s.serivceName
 }
 
+func (s *StateHelper) SetInitiated() {
+	s.mu.Lock()
+	s.state = int(serviceStateInitiated)
+	s.mu.Unlock()
+}
+
 func (s *StateHelper) SetRunning() {
 	s.mu.Lock()
 	s.state = int(serviceStateRunning)
@@ -349,6 +355,13 @@ func (s *StateHelper) SetStopped() {
 	s.mu.Lock()
 	s.state = int(serviceStateStopped)
 	s.mu.Unlock()
+}
+
+func (s *StateHelper) IsInitiated() bool {
+	if s.IsRunning() {
+		return true
+	}
+	return s.get() == int(serviceStateInitiated)
 }
 
 func (s *StateHelper) IsRunning() bool {
