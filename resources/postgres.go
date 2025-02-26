@@ -71,8 +71,8 @@ func (sr *postgresResources) setPostgres(name string, dbs []*postgres.Postgres) 
 	sr.db[name] = dbs
 }
 
-// getPostgres retrieve a PostgreSQL database based on its name.
-func (sr *postgresResources) getPostgres(name string) (PostgresResource, error) {
+// GetPostgres retrieve a PostgreSQL database based on its name.
+func (sr *postgresResources) GetPostgres(name string) (PostgresResource, error) {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 	db, ok := sr.db[name]

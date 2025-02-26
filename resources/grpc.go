@@ -9,11 +9,13 @@ import (
 	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 
 	"github.com/studio-asd/pkg/grpc/client"
 	grpcserver "github.com/studio-asd/pkg/grpc/server"
 	httpserver "github.com/studio-asd/pkg/http/server"
+	"github.com/studio-asd/pkg/srun"
 )
 
 const (
@@ -23,16 +25,22 @@ const (
 
 func newGRPCResources() *grpcResources {
 	return &grpcResources{
-		clientResources: &grpcClientResources{
+		Client: &grpcClientResources{
 			clients: make(map[string]*grpc.ClientConn),
+		},
+		Server: &grpcServerResources{
+			servers: make(map[string]*grpcserver.Server),
+		},
+		Gateway: &grpcGatewayResources{
+			gateways: make(map[string]*GRPCGatewayObject),
 		},
 	}
 }
 
 type grpcResources struct {
-	clientResources  *grpcClientResources
-	severResources   *grpcServerResources
-	gatewayResources *grpcGatewayResources
+	Client  *grpcClientResources
+	Server  *grpcServerResources
+	Gateway *grpcGatewayResources
 }
 
 type grpcClientResources struct {
@@ -46,7 +54,7 @@ func (g *grpcClientResources) setClient(name string, conn *grpc.ClientConn) {
 	g.mu.Unlock()
 }
 
-func (g *grpcClientResources) getClient(name string) (*grpc.ClientConn, error) {
+func (g *grpcClientResources) GetClient(name string) (*grpc.ClientConn, error) {
 	g.mu.Lock()
 	conn, ok := g.clients[name]
 	g.mu.Unlock()
@@ -57,6 +65,9 @@ func (g *grpcClientResources) getClient(name string) (*grpc.ClientConn, error) {
 }
 
 func (g *grpcClientResources) close() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
 	var errs error
 	for _, c := range g.clients {
 		err := c.Close()
@@ -72,13 +83,34 @@ type grpcServerResources struct {
 	servers map[string]*grpcserver.Server
 }
 
+func (g *grpcServerResources) isEmpty() bool {
+	g.mu.Lock()
+	l := len(g.servers)
+	g.mu.Unlock()
+	return l == 0
+}
+
+func (g *grpcServerResources) close(ctx context.Context) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	var errs error
+	for _, server := range g.servers {
+		err := server.Stop(ctx)
+		if err != nil {
+			errs = errors.Join(errs, err)
+		}
+	}
+	return errs
+}
+
 func (g *grpcServerResources) setServer(name string, server *grpcserver.Server) {
 	g.mu.Lock()
 	g.servers[name] = server
 	g.mu.Unlock()
 }
 
-func (g *grpcServerResources) getServer(name string) (*grpcserver.Server, error) {
+func (g *grpcServerResources) GetServer(name string) (*grpcserver.Server, error) {
 	g.mu.Lock()
 	server, ok := g.servers[name]
 	g.mu.Unlock()
@@ -88,8 +120,66 @@ func (g *grpcServerResources) getServer(name string) (*grpcserver.Server, error)
 	return server, nil
 }
 
+func (g *grpcServerResources) run(ctx context.Context) error {
+	errG := errgroup.Group{}
+	for _, server := range g.servers {
+		errG.Go(func() error {
+			return server.Run(ctx)
+		})
+	}
+	return errG.Wait()
+}
+
 type grpcGatewayResources struct {
-	mu sync.Mutex
+	mu       sync.Mutex
+	gateways map[string]*GRPCGatewayObject
+}
+
+func (g *grpcGatewayResources) isEmpty() bool {
+	g.mu.Lock()
+	l := len(g.gateways)
+	g.mu.Unlock()
+	return l == 0
+}
+
+func (g *grpcGatewayResources) close(ctx context.Context) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	var errs error
+	for _, gw := range g.gateways {
+		err := gw.httpServer.Stop(ctx)
+		if err != nil {
+			errs = errors.Join(errs, err)
+		}
+	}
+	return errs
+}
+
+func (g *grpcGatewayResources) setGateway(name string, gw *GRPCGatewayObject) {
+	g.mu.Lock()
+	g.gateways[name] = gw
+	g.mu.Unlock()
+}
+
+func (g *grpcGatewayResources) GetGateway(name string) (*GRPCGatewayObject, error) {
+	g.mu.Lock()
+	server, ok := g.gateways[name]
+	g.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("grpc_gateway: gateway with name %s does not exist", name)
+	}
+	return server, nil
+}
+
+func (g *grpcGatewayResources) run(ctx context.Context) error {
+	errG := errgroup.Group{}
+	for _, gw := range g.gateways {
+		errG.Go(func() error {
+			return gw.run(ctx)
+		})
+	}
+	return errG.Wait()
 }
 
 type GRPCResourcesConfig struct {
@@ -128,7 +218,7 @@ func (g *GRPCResourcesConfig) connectGRPCClients(ctx context.Context, resources 
 			)
 			return err
 		}
-		resources.clientResources.setClient(c.Name, conn)
+		resources.Client.setClient(c.Name, conn)
 	}
 	return nil
 }
@@ -163,11 +253,57 @@ func (g *GRPCClientResourceConfig) Connect() (*grpc.ClientConn, error) {
 
 func (g *GRPCResourcesConfig) createGRPCServers(ctx context.Context, resources *grpcResources) error {
 	for _, server := range g.ServerResources {
+		attrs := []slog.Attr{
+			slog.String("server_name", server.Name),
+			slog.String("server_address", server.Address),
+		}
+		g.logger.LogAttrs(
+			ctx,
+			slog.LevelInfo,
+			"[resources][grpc_server] creating gRPC server",
+			attrs...,
+		)
 		s, err := server.create()
 		if err != nil {
+			g.logger.LogAttrs(
+				ctx,
+				slog.LevelError,
+				"[resources][grpc_server] failed to create gRPC server",
+				attrs...,
+			)
 			return err
 		}
-		resources.severResources.setServer(server.Name, s)
+		resources.Server.setServer(server.Name, s)
+	}
+	return nil
+}
+
+func (g *GRPCResourcesConfig) createGRPCGateway(ctx context.Context, resources *grpcResources) error {
+	for _, server := range g.ServerResources {
+		if server.GRPCGateway.Addres == "" {
+			continue
+		}
+		attrs := []slog.Attr{
+			slog.String("grpc_name", server.Name),
+			slog.String("gateway_address", server.GRPCGateway.Addres),
+		}
+		g.logger.LogAttrs(
+			ctx,
+			slog.LevelInfo,
+			"[resources][grpc_gateway] creating gRPC gateway server",
+			attrs...,
+		)
+		gw, err := server.GRPCGateway.create()
+		if err != nil {
+			g.logger.LogAttrs(
+				ctx,
+				slog.LevelInfo,
+				"[resources][grpc_gateway] failed to create gRPC gateway server",
+				attrs...,
+			)
+			return err
+		}
+		resources.Gateway.setGateway(server.Name, gw)
 	}
 	return nil
 }
@@ -229,12 +365,10 @@ type GRPCGatewayResourceConfig struct {
 	readTimeout  Duration
 }
 
-type GRPCGatewayObject struct {
-	servicesHandlerFn func(ctx context.Context, mux *runtime.ServeMux, endpoint string, opts []grpc.DialOption) (err error)
-	httpServer        *httpserver.Server
-}
-
 func (g *GRPCGatewayResourceConfig) create() (*GRPCGatewayObject, error) {
+	if g.Addres == "" {
+		return nil, errors.New("cannot craete grpc gateway with empty address")
+	}
 	s, err := httpserver.New(httpserver.Config{
 		Name:         fmt.Sprintf("%s-grpc-gateway", g.name),
 		WriteTimeout: time.Duration(g.writeTimeout),
@@ -246,4 +380,18 @@ func (g *GRPCGatewayResourceConfig) create() (*GRPCGatewayObject, error) {
 	return &GRPCGatewayObject{
 		httpServer: s,
 	}, nil
+}
+
+type GRPCGatewayObject struct {
+	mu                sync.Mutex
+	servicesHandlerFn []func(ctx context.Context, mux *runtime.ServeMux, endpoint string, opts []grpc.DialOption) (err error)
+	httpServer        *httpserver.Server
+}
+
+func (g *GRPCGatewayObject) init(ctx srun.Context) error {
+	return g.httpServer.Init(ctx)
+}
+
+func (g *GRPCGatewayObject) run(ctx context.Context) error {
+	return g.httpServer.Run(ctx)
 }

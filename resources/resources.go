@@ -7,6 +7,7 @@ import (
 
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/studio-asd/pkg/srun"
 )
@@ -54,13 +55,6 @@ type Resources struct {
 
 	stateHelper *srun.StateHelper
 	stopC       chan struct{}
-}
-
-type ResourcesContainer struct {
-	// PostgreSQL connections.
-	postrgres *postgresResources
-	// GRPC client connections.
-	grpc *grpcResources
 }
 
 func New(ctx context.Context, config Config) (*Resources, error) {
@@ -117,10 +111,34 @@ func (r *Resources) Run(ctx context.Context) error {
 	if r.stateHelper.IsRunning() {
 		return nil
 	}
+
+	errC := make(chan error, 1)
+	errG := errgroup.Group{}
+
+	if r.container.grpc != nil {
+		if !r.container.grpc.Server.isEmpty() {
+			errG.Go(func() error {
+				return r.container.grpc.Server.run(ctx)
+			})
+		}
+		if !r.container.grpc.Gateway.isEmpty() {
+			errG.Go(func() error {
+				return r.container.grpc.Gateway.run(ctx)
+			})
+		}
+	}
 	r.stateHelper.SetRunning()
 
-	<-r.stopC
-	return nil
+	go func() {
+		errC <- errG.Wait()
+	}()
+
+	select {
+	case <-r.stopC:
+		return nil
+	case err := <-errC:
+		return err
+	}
 }
 
 func (r *Resources) Ready(ctx context.Context) error {
@@ -137,15 +155,26 @@ func (r *Resources) Stop(ctx context.Context) error {
 	}
 
 	var errs error
-	if r.container.postrgres != nil {
-		r.logger.Info("[resources] closing all PostgreSQL connections")
-		if err := r.container.postrgres.close(); err != nil {
+	if r.container.grpc != nil {
+		r.logger.Info("[resources][grpc_client] closing all gRPC clients connections")
+		if err := r.container.grpc.Client.close(); err != nil {
 			errs = errors.Join(errs, err)
 		}
+		r.logger.Info("[resources][grpc_server] closing all gRPC servers")
+		if err := r.container.grpc.Server.close(ctx); err != nil {
+			err = errors.Join(errs, err)
+		}
+		r.logger.Info("[resources][grpc_gateway] closing all gRPC servers")
+		if err := r.container.grpc.Gateway.close(ctx); err != nil {
+			err = errors.Join(errs, err)
+		}
 	}
-	if r.container.grpc != nil {
-		r.logger.Info("[resources] closing all gRPC connections")
-		if err := r.container.grpc.clientResources.close(); err != nil {
+
+	// Below services need to be stopped last.
+	// Stops all databases connections at the end of the stop process, as we want to ensure all connections are drained.
+	if r.container.postrgres != nil {
+		r.logger.Info("[resources][postgresql] closing all PostgreSQL connections")
+		if err := r.container.postrgres.close(); err != nil {
 			errs = errors.Join(errs, err)
 		}
 	}
@@ -194,8 +223,25 @@ func (r *Resources) init(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			// Init the grpc server, because the grpc server implements srun.RunnerAwareService, some components are
+			// being initialized there.
+			for _, server := range grpcResources.Server.servers {
+				if err := server.Init(srun.Context{}); err != nil {
+					return err
+				}
+			}
+			err = r.config.GRPC.createGRPCGateway(ctx, grpcResources)
+			if err != nil {
+				return err
+			}
+			// Init the grpc gateway, because the http server implements srun.RunnerAwareService, some components are
+			// being initialized there.
+			for _, gw := range grpcResources.Gateway.gateways {
+				if err := gw.init(srun.Context{}); err != nil {
+					return err
+				}
+			}
 		}
-
 		r.container.grpc = grpcResources
 	}
 	return nil
