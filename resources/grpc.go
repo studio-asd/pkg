@@ -23,15 +23,18 @@ const (
 	defaultGRPCServerWriteTimeout = time.Second * 20
 )
 
-func newGRPCResources() *grpcResources {
+func newGRPCResources(logger *slog.Logger) *grpcResources {
 	return &grpcResources{
 		Client: &grpcClientResources{
+			logger:  logger,
 			clients: make(map[string]*grpc.ClientConn),
 		},
 		Server: &grpcServerResources{
+			logger:  logger,
 			servers: make(map[string]*grpcserver.Server),
 		},
 		Gateway: &grpcGatewayResources{
+			logger:   logger,
 			gateways: make(map[string]*GRPCGatewayObject),
 		},
 	}
@@ -44,6 +47,7 @@ type grpcResources struct {
 }
 
 type grpcClientResources struct {
+	logger  *slog.Logger
 	mu      sync.Mutex
 	clients map[string]*grpc.ClientConn
 }
@@ -79,6 +83,7 @@ func (g *grpcClientResources) close() error {
 }
 
 type grpcServerResources struct {
+	logger  *slog.Logger
 	mu      sync.Mutex
 	servers map[string]*grpcserver.Server
 }
@@ -122,7 +127,13 @@ func (g *grpcServerResources) GetServer(name string) (*grpcserver.Server, error)
 
 func (g *grpcServerResources) run(ctx context.Context) error {
 	errG := errgroup.Group{}
-	for _, server := range g.servers {
+	for name, server := range g.servers {
+		g.logger.LogAttrs(
+			ctx,
+			slog.LevelInfo,
+			"[resources][grpc_server] starting gRPC server...",
+			slog.String("server_name", name),
+		)
 		errG.Go(func() error {
 			return server.Run(ctx)
 		})
@@ -131,6 +142,7 @@ func (g *grpcServerResources) run(ctx context.Context) error {
 }
 
 type grpcGatewayResources struct {
+	logger   *slog.Logger
 	mu       sync.Mutex
 	gateways map[string]*GRPCGatewayObject
 }
@@ -174,7 +186,13 @@ func (g *grpcGatewayResources) GetGateway(name string) (*GRPCGatewayObject, erro
 
 func (g *grpcGatewayResources) run(ctx context.Context) error {
 	errG := errgroup.Group{}
-	for _, gw := range g.gateways {
+	for name, gw := range g.gateways {
+		g.logger.LogAttrs(
+			ctx,
+			slog.LevelInfo,
+			"[resources][grpc_gateway] starting gRPC gateway server...",
+			slog.String("grpc_server_name", name),
+		)
 		errG.Go(func() error {
 			return gw.run(ctx)
 		})
@@ -200,7 +218,7 @@ func (g *GRPCResourcesConfig) Validate() error {
 func (g *GRPCResourcesConfig) connectGRPCClients(ctx context.Context, resources *grpcResources) error {
 	for _, c := range g.ClientResources {
 		attrs := []slog.Attr{
-			slog.String("client.name", c.Name),
+			slog.String("client_name", c.Name),
 		}
 		g.logger.LogAttrs(
 			ctx,
@@ -284,7 +302,7 @@ func (g *GRPCResourcesConfig) createGRPCGateway(ctx context.Context, resources *
 			continue
 		}
 		attrs := []slog.Attr{
-			slog.String("grpc_name", server.Name),
+			slog.String("grpc_server_name", server.Name),
 			slog.String("gateway_address", server.GRPCGateway.Addres),
 		}
 		g.logger.LogAttrs(
