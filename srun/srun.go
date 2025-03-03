@@ -124,6 +124,8 @@ var (
 	errUnhealthyService  = errors.New("healthcheck: service is not healthy")
 	errInvalidStateOrder = errors.New("service is not in a desired state")
 	errAllServicesExited = errors.New("all services exited")
+	// errOnExitFunc is used to wrap the error that exists within onExitFn invocation.
+	errOnExitFunc = errors.New("exitFunc: got error when invoking on exit function")
 )
 
 type Service interface {
@@ -199,12 +201,22 @@ type ServiceRunner interface {
 	Register(services ...ServiceRegistrar) error
 	Context() Context
 	Admin() AdminItf
+	OnExitFunc(func(context.Context, error) error)
 }
 
 // Registrar implements ServiceRunner.
 type Registrar struct {
 	runner  *Runner
 	context Context
+}
+
+// OnExitFunc register the exit func that will be triggered when the service runner exit. This function can be used as an exit
+// hook to trigger some cleanups.
+func (r *Registrar) OnExitFunc(fn func(context.Context, error) error) {
+	if fn == nil {
+		return
+	}
+	r.runner.onExitFn = fn
 }
 
 // Register calls internal runner register function to register services to the runner.
@@ -276,6 +288,8 @@ type Runner struct {
 	flags *Flags
 	// testConfFn is the function that will be triggered when --test-config flag is defined.
 	testConfFn func(Context) error
+	//onExitFn is the function that will be triggered when the runner is exiting.
+	onExitFn func(context.Context, error) error
 }
 
 // Error is a helper function that returns functions that satisfy srun.Run. The helper function can be used to easily wrap an error when
@@ -312,15 +326,18 @@ func New(config Config) *Runner {
 	setDefaultSlog(conf.Logger)
 
 	f := newFlags()
-	// Slice the args after first argument as the first argument is usually the program name.
-	if err := f.Parse(os.Args[1:]...); err != nil {
-		panic(err)
-	}
-	// If version is mentioned in the flag, then we should print the current program version
-	// and exit with zero(0).
-	if f.version {
-		fmt.Printf("v%s\n", conf.Version)
-		os.Exit(0)
+	// If in test, then we should not try to prase the flags as there are many flags being passed inside go test.
+	if !testing.Testing() {
+		// Slice the args after first argument as the first argument is usually the program name.
+		if err := f.Parse(os.Args[1:]...); err != nil {
+			panic(err)
+		}
+		// If version is mentioned in the flag, then we should print the current program version
+		// and exit with zero(0).
+		if f.version {
+			fmt.Printf("v%s\n", conf.Version)
+			os.Exit(0)
+		}
 	}
 
 	var (
@@ -511,16 +528,25 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 			}
 			stackTrace = debug.Stack()
 		}
+		// Wrap the error with additional information of stack trace.
+		if stackTrace != nil {
+			returnedErr = fmt.Errorf("%w\n\n%s", returnedErr, string(stackTrace))
+		}
+		// Check if the onExit function is not nil, then we should trigger the function. Any kind of error
+		// should result in immediate return.
+		if r.onExitFn != nil {
+			err := onExitWrapper(context.Background(), returnedErr, r.onExitFn)
+			if err != nil {
+				returnedErr = errors.Join(returnedErr, err)
+				return
+			}
+		}
 		// Check if th error is expected or not upon exit. Because we send the cancelled context error
 		// with cause to determine why the program exit.
 		if !isError(returnedErr) {
 			return
 		}
 
-		// Wrap the error with additional information of stack trace.
-		if stackTrace != nil {
-			returnedErr = fmt.Errorf("%w\n\n%s", returnedErr, string(stackTrace))
-		}
 	}()
 
 	parentCtx := r.ctx
@@ -1055,4 +1081,9 @@ func (s *ServiceStateTracker) getState() serviceState {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 	return s.state
+}
+
+func onExitWrapper(ctx context.Context, err error, fn func(context.Context, error) error) error {
+	// (TODO) Ensure we hit recover here because foreign exit function can produce panic.
+	return fn(ctx, err)
 }

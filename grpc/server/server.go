@@ -83,10 +83,6 @@ func (s *Server) Init(ctx srun.Context) error {
 	if s.config.Meter.Meter == nil {
 		s.config.Meter.Meter = ctx.Meter
 	}
-	// Register all the services into the server.
-	for _, fn := range s.registerServiceFns {
-		fn(s.server)
-	}
 	return nil
 }
 
@@ -98,6 +94,11 @@ func (s *Server) Ready(ctx context.Context) error {
 }
 
 func (s *Server) Run(ctx context.Context) error {
+	// Register all the services into the server.
+	for _, fn := range s.registerServiceFns {
+		fn(s.server)
+	}
+
 	errC := make(chan error, 1)
 	go func() {
 		errC <- s.server.Serve(s.listener)

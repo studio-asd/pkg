@@ -657,7 +657,6 @@ func (p *Postgres) WithMetrics(ctx context.Context, name string, fn func(context
 	if name == "" {
 		return errors.New("name cannot be empty to collect metrics")
 	}
-
 	pg := &Postgres{
 		tracer:      p.tracer,
 		db:          p.db,

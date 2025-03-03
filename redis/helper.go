@@ -7,6 +7,7 @@ import (
 	rd "github.com/redis/go-redis/v9"
 )
 
+// Helper wraps the redis client to directly returns the redis command result output.
 type Helper struct {
 	client *rd.Client
 }

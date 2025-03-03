@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -19,6 +20,7 @@ import (
 )
 
 var _ ServiceRunnerAware = (*serviceDoNothing)(nil)
+var errTesting = errors.New("testing error")
 
 func TestRegistrar(t *testing.T) {
 	t.Parallel()
@@ -150,6 +152,42 @@ func TestRunReturn(t *testing.T) {
 				"SRUN_DEADLINE_TIMEOUT": "3s",
 			},
 		},
+		{
+			name: "on_exit_func_nil",
+			run: func(ctx context.Context, r ServiceRunner) error {
+				r.OnExitFunc(func(ctx context.Context, err error) error {
+					if err != nil {
+						return errors.New("expecting nil error for exit func")
+					}
+					return nil
+				})
+				return nil
+			},
+			expect: func(t *testing.T, err error) {
+				t.Helper()
+				if err != nil {
+					t.Fatalf("expecting nil but got %v", err)
+				}
+			},
+		},
+		{
+			name: "on_exit_err_testing",
+			run: func(ctx context.Context, r ServiceRunner) error {
+				r.OnExitFunc(func(ctx context.Context, err error) error {
+					if !errors.Is(err, errTesting) {
+						return fmt.Errorf("expecting error testing but got %v", err)
+					}
+					return nil
+				})
+				return errTesting
+			},
+			expect: func(t *testing.T, err error) {
+				t.Helper()
+				if !errors.Is(err, errTesting) {
+					t.Fatal("expecting error testing")
+				}
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -260,14 +298,14 @@ func TestServiceStateLog(t *testing.T) {
 	expect := `level=INFO msg="Running program: testing" logger_scope=service_runner
 level=INFO msg="[Service] testing_1: INITIATING" logger_scope=service_runner
 level=INFO msg="[Service] testing_1: INITIATED" logger_scope=service_runner
-level=INFO msg="[Service] testing_1: STARTING" logger_scope=service_runner
-level=INFO msg="[Service] testing_1: RUNNING" logger_scope=service_runner
 level=INFO msg="[Service] testing_2: INITIATING" logger_scope=service_runner
 level=INFO msg="[Service] testing_2: INITIATED" logger_scope=service_runner
-level=INFO msg="[Service] testing_2: STARTING" logger_scope=service_runner
-level=INFO msg="[Service] testing_2: RUNNING" logger_scope=service_runner
 level=INFO msg="[Service] testing_3: INITIATING" logger_scope=service_runner
 level=INFO msg="[Service] testing_3: INITIATED" logger_scope=service_runner
+level=INFO msg="[Service] testing_1: STARTING" logger_scope=service_runner
+level=INFO msg="[Service] testing_1: RUNNING" logger_scope=service_runner
+level=INFO msg="[Service] testing_2: STARTING" logger_scope=service_runner
+level=INFO msg="[Service] testing_2: RUNNING" logger_scope=service_runner
 level=INFO msg="[Service] testing_3: STARTING" logger_scope=service_runner
 level=INFO msg="[Service] testing_3: RUNNING" logger_scope=service_runner
 level=INFO msg="[Service] testing_1: RUN_EXITED" logger_scope=service_runner
@@ -278,8 +316,7 @@ level=INFO msg="[Service] testing_3: STOPPED" logger_scope=service_runner
 level=INFO msg="[Service] testing_2: SHUTTING DOWN" logger_scope=service_runner
 level=INFO msg="[Service] testing_2: STOPPED" logger_scope=service_runner
 level=INFO msg="[Service] testing_1: SHUTTING DOWN" logger_scope=service_runner
-level=INFO msg="[Service] testing_1: STOPPED" logger_scope=service_runner
-`
+level=INFO msg="[Service] testing_1: STOPPED" logger_scope=service_runner`
 
 	buff := bytes.NewBuffer(nil)
 	config := Config{

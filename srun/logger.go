@@ -5,11 +5,16 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"testing"
 )
 
 const (
 	LogFormatText = "text"
 	LogFormatJSON = "json"
+
+	loggerAppNameKey    = "app_name"
+	loggerAppVersionKey = "app_version"
+	loggerGoVersionKey  = "go_version"
 )
 
 const defaultLogLevel = slog.LevelInfo
@@ -65,6 +70,18 @@ func setDefaultSlog(config LoggerConfig) {
 			return attr
 		}
 	}
+	// If testing then we should force the removal of several key attributes.
+	if testing.Testing() {
+		replacerFunc = func(groups []string, attr slog.Attr) slog.Attr {
+			if len(groups) == 0 {
+				switch attr.Key {
+				case slog.TimeKey, loggerAppVersionKey, loggerAppNameKey, loggerGoVersionKey:
+					return slog.Attr{}
+				}
+			}
+			return attr
+		}
+	}
 
 	// By default, send all the logs to os.Stderr, but overrides the configuration with user parameters.
 	var output io.Writer = os.Stderr
@@ -99,9 +116,9 @@ func setDefaultSlog(config LoggerConfig) {
 		)
 	}
 	logger := slog.New(handler).With(
-		slog.String("app_name", config.appName),
-		slog.String("app_version", config.appVersion),
-		slog.String("go_version", config.goVersion),
+		slog.String(loggerAppNameKey, config.appName),
+		slog.String(loggerAppVersionKey, config.appVersion),
+		slog.String(loggerGoVersionKey, config.goVersion),
 	)
 	slog.SetDefault(logger)
 }

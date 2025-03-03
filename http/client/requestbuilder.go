@@ -11,9 +11,10 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/studio-asd/pkg/instrumentation"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
+
+	"github.com/studio-asd/pkg/instrumentation"
 )
 
 // Request store the information to create a http.Request via compile method.

@@ -31,7 +31,7 @@ func newGRPCResources(logger *slog.Logger) *grpcResources {
 		},
 		Server: &grpcServerResources{
 			logger:  logger,
-			servers: make(map[string]*grpcserver.Server),
+			servers: make(map[string]*GRPCServerObject),
 		},
 		Gateway: &grpcGatewayResources{
 			logger:   logger,
@@ -44,6 +44,18 @@ type grpcResources struct {
 	Client  *grpcClientResources
 	Server  *grpcServerResources
 	Gateway *grpcGatewayResources
+}
+
+func (g *grpcResources) init(ctx srun.Context) error {
+	return nil
+}
+
+func (g *grpcResources) run(ctx context.Context) error {
+	return nil
+}
+
+func (g *grpcResources) stop(ctx context.Context) error {
+	return nil
 }
 
 type grpcClientResources struct {
@@ -85,7 +97,18 @@ func (g *grpcClientResources) close() error {
 type grpcServerResources struct {
 	logger  *slog.Logger
 	mu      sync.Mutex
-	servers map[string]*grpcserver.Server
+	servers map[string]*GRPCServerObject
+}
+
+// GRPCServerObject wraps the grpc server to only expose the function needed to register the services to
+// the grpc server.
+type GRPCServerObject struct {
+	server *grpcserver.Server
+}
+
+// RegisterService registers the grpc services to the grpc server.
+func (g *GRPCServerObject) RegisterService(fn func(s grpc.ServiceRegistrar)) {
+	g.server.RegisterService(fn)
 }
 
 func (g *grpcServerResources) isEmpty() bool {
@@ -101,7 +124,7 @@ func (g *grpcServerResources) close(ctx context.Context) error {
 
 	var errs error
 	for _, server := range g.servers {
-		err := server.Stop(ctx)
+		err := server.server.Stop(ctx)
 		if err != nil {
 			errs = errors.Join(errs, err)
 		}
@@ -109,13 +132,13 @@ func (g *grpcServerResources) close(ctx context.Context) error {
 	return errs
 }
 
-func (g *grpcServerResources) setServer(name string, server *grpcserver.Server) {
+func (g *grpcServerResources) setServer(name string, server *GRPCServerObject) {
 	g.mu.Lock()
 	g.servers[name] = server
 	g.mu.Unlock()
 }
 
-func (g *grpcServerResources) GetServer(name string) (*grpcserver.Server, error) {
+func (g *grpcServerResources) GetServer(name string) (*GRPCServerObject, error) {
 	g.mu.Lock()
 	server, ok := g.servers[name]
 	g.mu.Unlock()
@@ -135,7 +158,7 @@ func (g *grpcServerResources) run(ctx context.Context) error {
 			slog.String("server_name", name),
 		)
 		errG.Go(func() error {
-			return server.Run(ctx)
+			return server.server.Run(ctx)
 		})
 	}
 	return errG.Wait()
@@ -160,7 +183,7 @@ func (g *grpcGatewayResources) close(ctx context.Context) error {
 
 	var errs error
 	for _, gw := range g.gateways {
-		err := gw.httpServer.Stop(ctx)
+		err := gw.stop(ctx)
 		if err != nil {
 			errs = errors.Join(errs, err)
 		}
@@ -364,7 +387,7 @@ func (g *GRPCServerResourceConfig) validate() error {
 	return nil
 }
 
-func (g *GRPCServerResourceConfig) create() (*grpcserver.Server, error) {
+func (g *GRPCServerResourceConfig) create() (*GRPCServerObject, error) {
 	server, err := grpcserver.New(grpcserver.Config{
 		Address:      g.Address,
 		WriteTimeout: time.Duration(g.WriteTimeout),
@@ -373,7 +396,9 @@ func (g *GRPCServerResourceConfig) create() (*grpcserver.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return server, nil
+	return &GRPCServerObject{
+		server: server,
+	}, nil
 }
 
 type GRPCGatewayResourceConfig struct {
@@ -412,4 +437,8 @@ func (g *GRPCGatewayObject) init(ctx srun.Context) error {
 
 func (g *GRPCGatewayObject) run(ctx context.Context) error {
 	return g.httpServer.Run(ctx)
+}
+
+func (g *GRPCGatewayObject) stop(ctx context.Context) error {
+	return g.httpServer.Stop(ctx)
 }

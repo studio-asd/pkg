@@ -2,13 +2,13 @@ package resources
 
 type ResourcesContainer struct {
 	// PostgreSQL connections.
-	postrgres *postgresResources
+	postrgres *PostgresResources
 	// GRPC client connections.
 	grpc *grpcResources
 	// Redis connections.
 }
 
-func (r *ResourcesContainer) Postgres() *postgresResources {
+func (r *ResourcesContainer) Postgres() *PostgresResources {
 	return r.postrgres
 }
 

@@ -234,14 +234,14 @@ func (r *Resources) init(ctx srun.Context) error {
 			// Init the grpc server, because the grpc server implements srun.RunnerAwareService, some components are
 			// being initialized there.
 			for _, server := range grpcResources.Server.servers {
-				if err := server.Init(srun.Context{
+				if err := server.server.Init(srun.Context{
 					RunnerAppName:    ctx.RunnerAppName,
 					RunnerAppVersion: ctx.RunnerAppVersion,
 					Ctx:              ctx.Ctx,
-					Logger:           slog.Default().With("logger_scope", fmt.Sprintf("%s-grpc-server", server.Name())),
+					Logger:           slog.Default().With("logger_scope", fmt.Sprintf("%s-grpc-server", server.server.Name())),
 					Flags:            ctx.Flags,
-					Tracer:           otel.GetTracerProvider().Tracer(server.Name()),
-					Meter:            otel.GetMeterProvider().Meter(server.Name()),
+					Tracer:           otel.GetTracerProvider().Tracer(server.server.Name()),
+					Meter:            otel.GetMeterProvider().Meter(server.server.Name()),
 				}); err != nil {
 					return err
 				}

@@ -2,6 +2,7 @@ package resources
 
 import (
 	"context"
+	"embed"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -52,27 +53,27 @@ func (pr PostgresResource) Secondary() *postgres.Postgres {
 	return pr[0]
 }
 
-// postgresResources keeps all the PostgreSQL resources with name of the database as the key.
-type postgresResources struct {
+// PostgresResources keeps all the PostgreSQL resources with name of the database as the key.
+type PostgresResources struct {
 	mu sync.Mutex
 	db map[string]PostgresResource
 }
 
 // newPostgresResources creates new postgres resources object.
-func newpostgresResources() *postgresResources {
-	return &postgresResources{
+func newpostgresResources() *PostgresResources {
+	return &PostgresResources{
 		db: make(map[string]PostgresResource),
 	}
 }
 
-func (sr *postgresResources) setPostgres(name string, dbs []*postgres.Postgres) {
+func (sr *PostgresResources) setPostgres(name string, dbs []*postgres.Postgres) {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 	sr.db[name] = dbs
 }
 
 // GetPostgres retrieve a PostgreSQL database based on its name.
-func (sr *postgresResources) GetPostgres(name string) (PostgresResource, error) {
+func (sr *PostgresResources) GetPostgres(name string) (PostgresResource, error) {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 	db, ok := sr.db[name]
@@ -82,8 +83,16 @@ func (sr *postgresResources) GetPostgres(name string) (PostgresResource, error) 
 	return db, nil
 }
 
+func (sr *PostgresResources) MustGetPostgres(name string) PostgresResource {
+	pg, err := sr.GetPostgres(name)
+	if err != nil {
+		panic(err)
+	}
+	return pg
+}
+
 // close closes all resources of all PostgreSQL resources.
-func (sr *postgresResources) close() error {
+func (sr *PostgresResources) close() error {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 
@@ -158,7 +167,10 @@ func (soc *PostgresOverrideableConfig) OverrideValue(val PostgresOverrideableCon
 }
 
 type PostgresResourcesConfig struct {
-	logger                     *slog.Logger
+	logger *slog.Logger
+	// EmbeddedSchema defines the embeded schema that will be applied for testing. If testing.Testing() returns false
+	// then the program will ignore the embedded schema.
+	EmbeddedSchema             embed.FS             `yaml:"-"`
 	PostgresConnections        []PostgresConnConfig `yaml:"connects"`
 	PostgresOverrideableConfig `yaml:",inline"`
 }
@@ -173,7 +185,7 @@ func (sc *PostgresResourcesConfig) Validate() error {
 	return nil
 }
 
-func (sc *PostgresResourcesConfig) connect(ctx context.Context) (*postgresResources, error) {
+func (sc *PostgresResourcesConfig) connect(ctx context.Context) (*PostgresResources, error) {
 	resources := newpostgresResources()
 	for _, conn := range sc.PostgresConnections {
 		primaryDSN, err := postgres.ParseDSN(conn.PrimaryDB.DSN)

@@ -18,11 +18,6 @@ const grpcServiceConfig = `{
 }
 `
 
-type Client struct {
-	conn   *grpc.ClientConn
-	config Config
-}
-
 // New creates a new gRPC client that use round_robin loadBalancingPolicy by default.
 func New(ctx context.Context, c Config) (*grpc.ClientConn, error) {
 	if err := c.Validate(); err != nil {
