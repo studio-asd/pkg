@@ -620,35 +620,52 @@ func (p *Postgres) StdlibDB() *sql.DB {
 
 // monitorPostgresStats creates a ticker loop and monitor the postgres database periodically via open telemetry.
 func monitorPostgresStats(ctx context.Context, p *Postgres) error {
-	ticker := time.NewTicker(time.Second * 30)
-	openConns, err := p.config.MeterConfig.Meter.Int64Counter("postgres_client_stats_max_open_conns")
+	tickerDuration := time.Second * 20
+	ticker := time.NewTicker(tickerDuration)
+	openConns, err := p.config.MeterConfig.Meter.Int64Counter("postgres.client.stats_max_open_conns")
 	if err != nil {
 		return err
 	}
-	idleConns, err := p.config.MeterConfig.Meter.Int64Counter("postgres_client_stats_idle_conns")
+	idleConns, err := p.config.MeterConfig.Meter.Int64Counter("postgres.client.stats_idle_conns")
 	if err != nil {
 		return err
 	}
-	inUseConns, err := p.config.MeterConfig.Meter.Int64Counter("postgres_client_stats_in_use")
+	inUseConns, err := p.config.MeterConfig.Meter.Int64Counter("postgres.client.stats_in_use")
 	if err != nil {
 		return err
 	}
+	// Collect the stats for the first time so we don't have empty stats when the program starts.
+	p.collectStats(
+		ctx,
+		idleConns,
+		openConns,
+		inUseConns,
+	)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			if p.pgx != nil {
-				idleConns.Add(ctx, int64(p.pgx.Stat().IdleConns()))
-				openConns.Add(ctx, int64(p.pgx.Stat().MaxConns()))
-				inUseConns.Add(ctx, p.pgx.Stat().AcquireCount())
-			} else {
-				idleConns.Add(ctx, int64(p.db.Stats().Idle))
-				openConns.Add(ctx, int64(p.db.Stats().MaxOpenConnections))
-				inUseConns.Add(ctx, int64(p.db.Stats().InUse))
-			}
+			p.collectStats(
+				ctx,
+				idleConns,
+				openConns,
+				inUseConns,
+			)
 		}
+	}
+}
+
+func (p *Postgres) collectStats(ctx context.Context, idleConns, openConns, inUseConns metric.Int64Counter) {
+	if p.pgx != nil {
+		idleConns.Add(ctx, int64(p.pgx.Stat().IdleConns()))
+		openConns.Add(ctx, int64(p.pgx.Stat().MaxConns()))
+		inUseConns.Add(ctx, p.pgx.Stat().AcquireCount())
+	} else {
+		idleConns.Add(ctx, int64(p.db.Stats().Idle))
+		openConns.Add(ctx, int64(p.db.Stats().MaxOpenConnections))
+		inUseConns.Add(ctx, int64(p.db.Stats().InUse))
 	}
 }
 

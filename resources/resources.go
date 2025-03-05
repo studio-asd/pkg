@@ -3,10 +3,8 @@ package resources
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
@@ -64,9 +62,13 @@ func New(ctx context.Context, config Config) (*Resources, error) {
 		return nil, err
 	}
 	r := &Resources{
+		logger:    slog.Default(),
 		config:    config,
 		stopC:     make(chan struct{}, 1),
 		container: &ResourcesContainer{},
+	}
+	if err := r.new(ctx); err != nil {
+		return nil, err
 	}
 	return r, nil
 }
@@ -158,23 +160,8 @@ func (r *Resources) Stop(ctx context.Context) error {
 
 	var errs error
 	if r.container.grpc != nil {
-		if len(r.container.grpc.Client.clients) > 0 {
-			r.logger.Info("[resources][grpc_client] closing all gRPC clients connections")
-			if err := r.container.grpc.Client.close(); err != nil {
-				errs = errors.Join(errs, err)
-			}
-		}
-		if !r.container.grpc.Server.isEmpty() {
-			r.logger.Info("[resources][grpc_server] closing all gRPC servers")
-			if err := r.container.grpc.Server.close(ctx); err != nil {
-				err = errors.Join(errs, err)
-			}
-		}
-		if !r.container.grpc.Gateway.isEmpty() {
-			r.logger.Info("[resources][grpc_gateway] closing all gRPC gateway servers")
-			if err := r.container.grpc.Gateway.close(ctx); err != nil {
-				err = errors.Join(errs, err)
-			}
+		if err := r.container.grpc.stop(ctx); err != nil {
+			err = errors.Join(errs, err)
 		}
 	}
 
@@ -190,17 +177,14 @@ func (r *Resources) Stop(ctx context.Context) error {
 	return errs
 }
 
-// init initiates some of the resources that need to be created before the object is registered to the srun. This is because
-// some of the resources might be needed in the time of initialization. For example, both HTTP and gRPC servers need handler
-// to works. Other thing is, databases and other objects that needed in Init phase are also need to be initiateed.
-func (r *Resources) init(ctx srun.Context) error {
+func (r *Resources) new(ctx context.Context) error {
 	// PostgreSQL.
 	if r.config.Postgres != nil {
 		r.logger.Info(
 			"[resources] Found postgres configuration, establishing connection to PostgreSQL databases...",
 			slog.Int("postgres_config_count", len(r.config.Postgres.PostgresConnections)),
 		)
-		pgResources, err := r.config.Postgres.connect(ctx.Ctx)
+		pgResources, err := r.config.Postgres.connect(ctx)
 		if err != nil {
 			return err
 		}
@@ -209,14 +193,13 @@ func (r *Resources) init(ctx srun.Context) error {
 	// GRPC.
 	if r.config.GRPC != nil {
 		grpcResources := newGRPCResources(r.logger)
-
 		// GRPC Clients.
 		if len(r.config.GRPC.ClientResources) > 0 {
 			r.logger.Info(
 				"[resources] Found grpc clients configuration, establishing connection to gRPC endpoints...",
 				slog.Int("grpc_clients_config_count", len(r.config.GRPC.ClientResources)),
 			)
-			err := r.config.GRPC.connectGRPCClients(ctx.Ctx, grpcResources)
+			err := r.config.GRPC.connectGRPCClients(ctx, grpcResources)
 			if err != nil {
 				return err
 			}
@@ -227,46 +210,28 @@ func (r *Resources) init(ctx srun.Context) error {
 				"[resources] Found grpc servers configuration, creating gRPC servers...",
 				slog.Int("grpc_servers_config", len(r.config.GRPC.ServerResources)),
 			)
-			err := r.config.GRPC.createGRPCServers(ctx.Ctx, grpcResources)
+			err := r.config.GRPC.createGRPCServers(ctx, grpcResources)
 			if err != nil {
 				return err
 			}
-			// Init the grpc server, because the grpc server implements srun.RunnerAwareService, some components are
-			// being initialized there.
-			for _, server := range grpcResources.Server.servers {
-				if err := server.server.Init(srun.Context{
-					RunnerAppName:    ctx.RunnerAppName,
-					RunnerAppVersion: ctx.RunnerAppVersion,
-					Ctx:              ctx.Ctx,
-					Logger:           slog.Default().With("logger_scope", fmt.Sprintf("%s-grpc-server", server.server.Name())),
-					Flags:            ctx.Flags,
-					Tracer:           otel.GetTracerProvider().Tracer(server.server.Name()),
-					Meter:            otel.GetMeterProvider().Meter(server.server.Name()),
-				}); err != nil {
-					return err
-				}
-			}
-			err = r.config.GRPC.createGRPCGateway(ctx.Ctx, grpcResources)
+			err = r.config.GRPC.createGRPCGateway(ctx, grpcResources)
 			if err != nil {
 				return err
-			}
-			// Init the grpc gateway, because the http server implements srun.RunnerAwareService, some components are
-			// being initialized there.
-			for name, gw := range grpcResources.Gateway.gateways {
-				if err := gw.init(srun.Context{
-					RunnerAppName:    ctx.RunnerAppName,
-					RunnerAppVersion: ctx.RunnerAppVersion,
-					Ctx:              ctx.Ctx,
-					Logger:           slog.Default().With("logger_scope", fmt.Sprintf("%s-grpc-gateway-server", name)),
-					Flags:            ctx.Flags,
-					Tracer:           otel.GetTracerProvider().Tracer(gw.httpServer.Name()),
-					Meter:            otel.GetMeterProvider().Meter(gw.httpServer.Name()),
-				}); err != nil {
-					return err
-				}
 			}
 		}
 		r.container.grpc = grpcResources
+	}
+	return nil
+}
+
+// init initiates some of the resources that need to be created before the object is registered to the srun. This is because
+// some of the resources might be needed in the time of initialization. For example, both HTTP and gRPC servers need handler
+// to works. Other thing is, databases and other objects that needed in Init phase are also need to be initiateed.
+func (r *Resources) init(ctx srun.Context) error {
+	if r.container.grpc != nil {
+		if err := r.container.grpc.init(ctx); err != nil {
+			return err
+		}
 	}
 	return nil
 }

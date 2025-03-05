@@ -2,14 +2,16 @@ package srun
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/runtime"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/prometheus"
-	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/metric"
 	meternoop "go.opentelemetry.io/otel/metric/noop"
 	metricsdk "go.opentelemetry.io/otel/sdk/metric"
@@ -21,7 +23,8 @@ import (
 )
 
 type OTelTracerConfig struct {
-	Disable bool
+	Disable  bool
+	Exporter OtelTracerExporter
 	// Below is a private configuration passed from the srun itself to provide several information
 	// for the open-telemetry.
 	appName    string
@@ -29,10 +32,31 @@ type OTelTracerConfig struct {
 	goVersion  string
 }
 
+type OtelTracerExporter struct {
+	GRPC *OtelTracerGRPCExporter
+	HTTP *OtelTracerHTTPExporter
+}
+
+type OtelTracerGRPCExporter struct {
+	Endpoint string
+	Insecure bool
+}
+
+type OtelTracerHTTPExporter struct {
+	Endpoint string
+	URLPath  string
+	Insecure bool
+}
+
 // newOTelTracerService returns a function to trigger and starts open telemetry processes. The function returns a function to allow us to use
 // the LongRunningTask so we can listen to the exit signal.
 func newOTelTracerService(config OTelTracerConfig) (trace.Tracer, *LongRunningTask, error) {
 	if config.Disable {
+		otel.SetTracerProvider(tracenoop.NewTracerProvider())
+		return tracenoop.NewTracerProvider().Tracer("noop"), nil, nil
+	}
+	// For now, if there is no exporter then we will ignore all the configurations.
+	if config.Exporter.HTTP == nil && config.Exporter.GRPC == nil {
 		otel.SetTracerProvider(tracenoop.NewTracerProvider())
 		return tracenoop.NewTracerProvider().Tracer("noop"), nil, nil
 	}
@@ -50,9 +74,35 @@ func newOTelTracerService(config OTelTracerConfig) (trace.Tracer, *LongRunningTa
 		return nil, nil, err
 	}
 
-	exporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
-	if err != nil {
-		return nil, nil, err
+	var exporter tracesdk.SpanExporter
+	if config.Exporter.HTTP != nil {
+		var opts []otlptracehttp.Option
+		if config.Exporter.HTTP.Endpoint != "" {
+			opts = append(opts, otlptracehttp.WithEndpoint(config.Exporter.HTTP.Endpoint))
+		}
+		if config.Exporter.HTTP.URLPath != "" {
+			opts = append(opts, otlptracehttp.WithURLPath(config.Exporter.HTTP.URLPath))
+		}
+		if config.Exporter.HTTP.Insecure {
+			opts = append(opts, otlptracehttp.WithInsecure())
+		}
+		exporter, err = otlptracehttp.New(context.Background(), opts...)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if config.Exporter.GRPC != nil {
+		var opts []otlptracegrpc.Option
+		if config.Exporter.GRPC.Endpoint != "" {
+			opts = append(opts, otlptracegrpc.WithEndpoint(config.Exporter.GRPC.Endpoint))
+		}
+		if config.Exporter.GRPC.Insecure {
+			opts = append(opts, otlptracegrpc.WithInsecure())
+		}
+		exporter, err = otlptracegrpc.New(context.Background(), opts...)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	provider := tracesdk.NewTracerProvider(
@@ -80,7 +130,14 @@ func newOTelTracerService(config OTelTracerConfig) (trace.Tracer, *LongRunningTa
 				slog.String("error", err.Error()),
 			)
 		}
-		return provider.Shutdown(ctxTimeout)
+		var err error
+		if pErr := provider.Shutdown(ctxTimeout); pErr != nil {
+			err = errors.Join(err, pErr)
+		}
+		if eErr := exporter.Shutdown(ctxTimeout); eErr != nil {
+			err = errors.Join(err, eErr)
+		}
+		return err
 	}
 	task, err := NewLongRunningTask("otel-tracer-listener", fn)
 	if err != nil {
@@ -129,7 +186,7 @@ func newOtelMetricMeterAndProviderService(config OtelMetricConfig) (metric.Meter
 		metricsdk.WithReader(promExporter),
 		metricsdk.WithResource(res),
 	)
-	// Set the meter provider so it can be used elsewhere in the program
+	// Set the meter provider so it can be used elsewhere in the program.
 	otel.SetMeterProvider(provider)
 	meter := provider.Meter(
 		config.MeterName,

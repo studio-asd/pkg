@@ -160,8 +160,8 @@ func (soc *PostgresOverrideableConfig) OverrideValue(val PostgresOverrideableCon
 	if soc.RetryDelay == 0 {
 		soc.RetryDelay = val.RetryDelay
 	}
-	// Only change the value to true if the parent value is true and child value is false.
-	if soc.MonitorStats != val.MonitorStats && val.MonitorStats {
+	// Only change the value to true if the parent value is true.
+	if val.MonitorStats {
 		soc.MonitorStats = val.MonitorStats
 	}
 }
@@ -176,6 +176,7 @@ type PostgresResourcesConfig struct {
 }
 
 func (sc *PostgresResourcesConfig) Validate() error {
+	sc.logger = slog.Default()
 	sc.PostgresOverrideableConfig.SetDefault()
 	for idx := range sc.PostgresConnections {
 		if err := sc.PostgresConnections[idx].Validate(sc.PostgresOverrideableConfig); err != nil {
@@ -288,7 +289,7 @@ func (scc *PostgresConnConfig) Connect(ctx context.Context) ([]*postgres.Postgre
 			},
 			MeterConfig: postgres.MeterConfig{
 				Meter:        otel.GetMeterProvider().Meter("postgres"),
-				MonitorStats: scc.MonitorStats,
+				MonitorStats: scc.PrimaryDB.MonitorStats,
 			},
 		},
 	)
@@ -322,6 +323,13 @@ func (scc *PostgresConnConfig) Connect(ctx context.Context) ([]*postgres.Postgre
 			MaxOpenConns:    scc.SecondaryDB.MaxOpenConns,
 			ConnMaxIdletime: time.Duration(scc.SecondaryDB.ConnMaxIdleTime),
 			ConnMaxLifetime: time.Duration(scc.SecondaryDB.ConnMaxLifetime),
+			TracerConfig: postgres.TracerConfig{
+				Tracer: otel.GetTracerProvider().Tracer("postgres"),
+			},
+			MeterConfig: postgres.MeterConfig{
+				Meter:        otel.GetMeterProvider().Meter("postgres"),
+				MonitorStats: scc.SecondaryDB.MonitorStats,
+			},
 		},
 	)
 	if err != nil {

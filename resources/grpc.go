@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"go.opentelemetry.io/otel"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 
@@ -25,6 +26,7 @@ const (
 
 func newGRPCResources(logger *slog.Logger) *grpcResources {
 	return &grpcResources{
+		logger: logger,
 		Client: &grpcClientResources{
 			logger:  logger,
 			clients: make(map[string]*grpc.ClientConn),
@@ -41,20 +43,46 @@ func newGRPCResources(logger *slog.Logger) *grpcResources {
 }
 
 type grpcResources struct {
+	logger  *slog.Logger
 	Client  *grpcClientResources
 	Server  *grpcServerResources
 	Gateway *grpcGatewayResources
 }
 
 func (g *grpcResources) init(ctx srun.Context) error {
-	return nil
-}
-
-func (g *grpcResources) run(ctx context.Context) error {
+	if g.Server != nil {
+		if err := g.Server.init(ctx); err != nil {
+			return err
+		}
+	}
+	if g.Gateway != nil {
+		if err := g.Gateway.init(ctx); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func (g *grpcResources) stop(ctx context.Context) error {
+	var errs error
+	if len(g.Client.clients) > 0 {
+		g.logger.Info("[resources][grpc_client] closing all gRPC clients connections")
+		if err := g.Client.close(); err != nil {
+			errs = errors.Join(errs, err)
+		}
+	}
+	if !g.Server.isEmpty() {
+		g.logger.Info("[resources][grpc_server] closing all gRPC servers")
+		if err := g.Server.close(ctx); err != nil {
+			err = errors.Join(errs, err)
+		}
+	}
+	if !g.Gateway.isEmpty() {
+		g.logger.Info("[resources][grpc_gateway] closing all gRPC gateway servers")
+		if err := g.Gateway.close(ctx); err != nil {
+			err = errors.Join(errs, err)
+		}
+	}
 	return nil
 }
 
@@ -148,6 +176,26 @@ func (g *grpcServerResources) GetServer(name string) (*GRPCServerObject, error) 
 	return server, nil
 }
 
+func (g *grpcServerResources) init(ctx srun.Context) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	for _, server := range g.servers {
+		if err := server.server.Init(srun.Context{
+			RunnerAppName:    ctx.RunnerAppName,
+			RunnerAppVersion: ctx.RunnerAppVersion,
+			Ctx:              ctx.Ctx,
+			Logger:           slog.Default().With("logger_scope", fmt.Sprintf("%s-grpc-server", server.server.Name())),
+			Flags:            ctx.Flags,
+			Tracer:           otel.GetTracerProvider().Tracer(server.server.Name()),
+			Meter:            otel.GetMeterProvider().Meter(server.server.Name()),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (g *grpcServerResources) run(ctx context.Context) error {
 	errG := errgroup.Group{}
 	for name, server := range g.servers {
@@ -207,6 +255,25 @@ func (g *grpcGatewayResources) GetGateway(name string) (*GRPCGatewayObject, erro
 	return server, nil
 }
 
+func (g *grpcGatewayResources) init(ctx srun.Context) error {
+	// Init the grpc gateway, because the http server implements srun.RunnerAwareService, some components are
+	// being initialized there.
+	for name, gw := range g.gateways {
+		if err := gw.init(srun.Context{
+			RunnerAppName:    ctx.RunnerAppName,
+			RunnerAppVersion: ctx.RunnerAppVersion,
+			Ctx:              ctx.Ctx,
+			Logger:           slog.Default().With("logger_scope", fmt.Sprintf("%s-grpc-gateway-server", name)),
+			Flags:            ctx.Flags,
+			Tracer:           otel.GetTracerProvider().Tracer(gw.httpServer.Name()),
+			Meter:            otel.GetMeterProvider().Meter(gw.httpServer.Name()),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (g *grpcGatewayResources) run(ctx context.Context) error {
 	errG := errgroup.Group{}
 	for name, gw := range g.gateways {
@@ -230,6 +297,7 @@ type GRPCResourcesConfig struct {
 }
 
 func (g *GRPCResourcesConfig) Validate() error {
+	g.logger = slog.Default()
 	for idx, c := range g.ClientResources {
 		if err := c.Validate(); err != nil {
 			return fmt.Errorf("grpc_resources/client [%d]: %w", idx, err)
