@@ -6,13 +6,13 @@ import "time"
 type Duration time.Duration
 
 // MarshalYAML for marshaling duration to yaml.
-func (d Duration) MarshalYAML() (interface{}, error) {
+func (d Duration) MarshalYAML() (any, error) {
 	dur := time.Duration(d)
 	return dur.String(), nil
 }
 
 // UnmarshalYAML for unmarshaling duration to yaml.
-func (d *Duration) UnmarshalYAML(unmarshal func(interface{}) error) error {
+func (d *Duration) UnmarshalYAML(unmarshal func(any) error) error {
 	var durationStr string
 	if err := unmarshal(&durationStr); err != nil {
 		return err

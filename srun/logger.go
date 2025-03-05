@@ -12,9 +12,9 @@ const (
 	LogFormatText = "text"
 	LogFormatJSON = "json"
 
-	loggerAppNameKey    = "app_name"
-	loggerAppVersionKey = "app_version"
-	loggerGoVersionKey  = "go_version"
+	loggerAppNameKey    = "app.name"
+	loggerAppVersionKey = "app.version"
+	loggerGoVersionKey  = "go.version"
 )
 
 const defaultLogLevel = slog.LevelInfo

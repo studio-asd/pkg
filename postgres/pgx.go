@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -17,15 +19,28 @@ import (
 //
 // Copy protocol documentation: https://www.postgresql.org/docs/current/sql-copy.html#:~:text=COPY%20moves%20data%20between%20PostgreSQL,results%20of%20a%20SELECT%20query.
 func (p *Postgres) CopyFromRows(ctx context.Context, table string, columns []string, values [][]interface{}) (rnum int64, err error) {
+	mt := time.Now()
 	spanCtx, span := p.tracer.Tracer.Start(
 		ctx,
 		"postgres.pgx.copyFromRows",
 		trace.WithSpanKind(trace.SpanKindInternal),
 	)
 	defer func() {
-		if err != nil {
-			span.SetStatus(codes.Error, err.Error())
+		newAttrs := []attribute.KeyValue{
+			attribute.String("postgres.func", "copyFromRows"),
 		}
+		if err != nil {
+			var code string
+			code, err = tryErrToPostgresError(err, p.IsPgx())
+			span.SetStatus(codes.Error, err.Error())
+			if code != "" {
+				newAttrs = append(newAttrs, attribute.String("postgres.err_code", code))
+			}
+		}
+		if errRecord := p.recordMetrics(ctx, mt, newAttrs); errRecord != nil {
+			err = errors.Join(err, errRecord)
+		}
+		span.SetAttributes(newAttrs...)
 		span.End()
 	}()
 

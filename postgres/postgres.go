@@ -161,23 +161,21 @@ func (p *Postgres) query(ctx context.Context, query string, params ...any) (rc *
 
 	defer func() {
 		newAttrs := []attribute.KeyValue{
-			attribute.String("postgres_func", "query"),
+			attribute.String("postgres.func", "query"),
 		}
 		if err != nil {
 			var code string
 			code, err = tryErrToPostgresError(err, p.IsPgx())
 			span.SetStatus(codes.Error, err.Error())
 			if code != "" {
-				newAttrs = append(newAttrs, attribute.String("postgres_err_code", code))
-				span.SetAttributes(
-					attribute.String("pg.errCode", code),
-				)
+				newAttrs = append(newAttrs, attribute.String("postgres.err_code", code))
 			}
 		}
 
 		if errRecord := p.recordMetrics(ctx, mt, newAttrs); errRecord != nil {
 			err = errors.Join(err, errRecord)
 		}
+		span.SetAttributes(newAttrs...)
 		span.End()
 	}()
 
@@ -254,11 +252,12 @@ func (p *Postgres) QueryRow(ctx context.Context, query string, params ...any) *R
 
 	defer func() {
 		newAttrs := []attribute.KeyValue{
-			attribute.String("postgres_func", "queryRow"),
+			attribute.String("postgres.func", "queryRow"),
 		}
 		// We need to silent the error here because the function signature don't return any error. We can return error if the implementation
 		// of pgx and database/sql is identical. Unfortunately pgx doesn't allowed us to return any error before scanning.
 		_ = p.recordMetrics(ctx, mt, newAttrs)
+		span.SetAttributes(newAttrs...)
 		span.End()
 	}()
 
@@ -291,11 +290,17 @@ func (p *Postgres) Exec(ctx context.Context, query string, params ...any) (ec *E
 			attribute.String("postgres_func", "exec"),
 		}
 		if err != nil {
+			var code string
+			code, err = tryErrToPostgresError(err, p.IsPgx())
 			span.SetStatus(codes.Error, err.Error())
+			if code != "" {
+				newAttrs = append(newAttrs, attribute.String("postgres.err_code", code))
+			}
 		}
 		if errRecord := p.recordMetrics(ctx, mt, newAttrs); errRecord != nil {
 			err = errors.Join(err, errRecord)
 		}
+		span.SetAttributes(newAttrs...)
 		span.End()
 	}()
 
@@ -481,22 +486,20 @@ func (p *Postgres) Prepare(ctx context.Context, query string) (sc *StmtCompat, e
 
 	defer func() {
 		newAttrs := []attribute.KeyValue{
-			attribute.String("postgres_func", "prepare"),
+			attribute.String("postgres.func", "prepare"),
 		}
 		if err != nil {
 			var code string
 			code, err = tryErrToPostgresError(err, p.IsPgx())
 			span.SetStatus(codes.Error, err.Error())
 			if code != "" {
-				newAttrs = append(newAttrs, attribute.String("postgres_err_code", code))
-				span.SetAttributes(
-					attribute.String("pg.errCode", code),
-				)
+				newAttrs = append(newAttrs, attribute.String("postgres.err_code", code))
 			}
 		}
 		if errRecord := p.recordMetrics(ctx, mt, newAttrs); errRecord != nil {
 			err = errors.Join(err, errRecord)
 		}
+		span.SetAttributes(newAttrs...)
 		span.End()
 	}()
 
@@ -530,23 +533,30 @@ func (p *Postgres) Prepare(ctx context.Context, query string) (sc *StmtCompat, e
 }
 
 func (p *Postgres) Ping(ctx context.Context) (err error) {
+	mt := time.Now()
 	spanCtx, span := p.tracer.Tracer.Start(
 		ctx,
 		"postgres.ping",
 		trace.WithSpanKind(trace.SpanKindInternal),
 	)
 	span.SetAttributes(p.config.TracerConfig.traceAttributesFromContext(ctx, "")...)
+
 	defer func() {
+		newAttrs := []attribute.KeyValue{
+			attribute.String("postgres.func", "ping"),
+		}
 		if err != nil {
 			var code string
 			code, err = tryErrToPostgresError(err, p.IsPgx())
 			span.SetStatus(codes.Error, err.Error())
 			if code != "" {
-				span.SetAttributes(
-					attribute.String("pg.errCode", code),
-				)
+				newAttrs = append(newAttrs, attribute.String("postgres.err_code", code))
 			}
 		}
+		if errRecord := p.recordMetrics(ctx, mt, newAttrs); errRecord != nil {
+			err = errors.Join(err, errRecord)
+		}
+		span.SetAttributes(newAttrs...)
 		span.End()
 	}()
 	if p.pgx != nil {
@@ -686,6 +696,9 @@ func (p *Postgres) WithMetrics(ctx context.Context, name string, fn func(context
 }
 
 func (p *Postgres) recordMetrics(ctx context.Context, t time.Time, attributes []attribute.KeyValue) error {
+	// Without the metrics name we will produce a metrics across all queries and it will be less useful.
+	// So we will only allow metrics recording when the metrics name is available, it means the user is aware
+	// of what metrics they want to record.
 	if p.metricsName == "" {
 		return nil
 	}
@@ -693,7 +706,11 @@ func (p *Postgres) recordMetrics(ctx context.Context, t time.Time, attributes []
 	if len(attributes) > 0 {
 		attrs = append(attrs, attributes...)
 	}
-	histogram, err := p.meter.Meter.Float64Histogram(p.metricsName)
+	// Set the operation name as one of the label for the metrics. The cardinality of the metrics will be as much
+	// as the number of metrics name.
+	attrs = append(attrs, attribute.String("operation.name", p.metricsName))
+
+	histogram, err := p.meter.Meter.Float64Histogram("postgres.query_execution")
 	if err != nil {
 		return err
 	}

@@ -171,7 +171,7 @@ func newOtelMetricMeterAndProviderService(config OtelMetricConfig) (metric.Meter
 			semconv.SchemaURL,
 			semconv.ServiceName(config.appName),
 			semconv.ServiceVersion(config.appVersion),
-			attribute.String("go_version", config.goVersion),
+			attribute.String("go.version", config.goVersion),
 		),
 	)
 	if err != nil {
