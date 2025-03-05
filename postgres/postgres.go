@@ -455,14 +455,15 @@ func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc 
 
 	// Create a new copy of Postgres and add the transaction object inside the object. This will make InTransaction() check to be true.
 	newPG := &Postgres{
-		config:     p.config,
-		closed:     p.closed,
-		searchPath: p.searchPath,
-		db:         p.db,
-		pgx:        p.pgx,
-		tx:         tx,
-		tracer:     p.tracer,
-		txIso:      iso,
+		config:      p.config,
+		closed:      p.closed,
+		searchPath:  p.searchPath,
+		db:          p.db,
+		pgx:         p.pgx,
+		tx:          tx,
+		tracer:      p.tracer,
+		txIso:       iso,
+		metricsName: p.metricsName,
 	}
 	err = txFunc(spanCtx, newPG)
 	if err != nil {
@@ -679,7 +680,30 @@ func (p *Postgres) collectStats(ctx context.Context, idleConns, openConns, inUse
 	}
 }
 
-// WithMetrics records the duration of function execution inside the fn.
+// WithMetrics records the duration of function execution inside the fn. The function will only records metrics if the metrics name is not empty
+// otherwise it will return a nil error.
+//
+// The metrics function is designed to records metrics across queries wrapped inside the WithMetrics scope. It will automatically propagates the
+// metrics name into other cloned Postgres object to ensure all operations within the WithMetrics function has the same metrics name. The same metricsName
+// across all operations are intended to ensure the users to have useful information across their executions. Do consider this case:
+//
+/* Transact (
+//	Query
+//	Query
+//	Exec
+*/
+// )
+//
+// From above example, the package will produce four(4) histogram metrics:
+// ^
+// |  <========================= 1. Transact ========================>
+// |    <==== 2. Query ====>
+// |                         <==== 3. Query ====>
+// |                                              <==== 4. Exec ====>
+// |
+// |-------------------------------------------------------------------> Time
+// And from these four(4) metrics you will find that all "metrics_name" will be the same, so you can easily find all the metrics that have the same name
+// to know more about on how the actual execution is being made.
 func (p *Postgres) WithMetrics(ctx context.Context, name string, fn func(context.Context, *Postgres) error) (err error) {
 	if name == "" {
 		return errors.New("name cannot be empty to collect metrics")
