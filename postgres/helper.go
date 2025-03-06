@@ -12,8 +12,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/lib/pq"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -67,6 +69,7 @@ func (p *Postgres) bulkInsert(ctx context.Context, table string, columns, return
 		return fmt.Errorf("modulus of len(values) and len(columns) must be 0: got %d", remainder)
 	}
 
+	mt := time.Now()
 	// Postgres supports up to 65535 parameters, but stop well before that
 	// so we don't construct humongous queries.
 	const maxParameters = 1000
@@ -83,11 +86,24 @@ func (p *Postgres) bulkInsert(ctx context.Context, table string, columns, return
 		trace.WithSpanKind(trace.SpanKindInternal),
 	)
 	defer func() {
-		if err != nil {
-			span.SetStatus(codes.Error, err.Error())
+		newAttrs := []attribute.KeyValue{
+			attribute.String("postgres.func", "bulk_insert"),
 		}
+		if err != nil {
+			var code string
+			code, err = tryErrToPostgresError(err, p.IsPgx())
+			span.SetStatus(codes.Error, err.Error())
+			if code != "" {
+				newAttrs = append(newAttrs, attribute.String("postgres.err_code", code))
+			}
+		}
+		if errRecord := p.recordMetrics(ctx, mt, newAttrs); errRecord != nil {
+			err = errors.Join(err, errRecord)
+		}
+		span.SetAttributes(newAttrs...)
 		span.End()
 	}()
+
 	if p.tx != nil {
 		span.SetAttributes(p.tx.SpanAttributes()...)
 	} else {
@@ -228,6 +244,8 @@ func (p *Postgres) BulkUpdate(ctx context.Context, table string, columns, types 
 	if len(columns) != len(values) {
 		return errors.New("len(values) != len(columns)")
 	}
+
+	mt := time.Now()
 	nRows := len(values[0])
 	for _, v := range values[1:] {
 		if len(v) != nRows {
@@ -243,9 +261,21 @@ func (p *Postgres) BulkUpdate(ctx context.Context, table string, columns, types 
 		trace.WithSpanKind(trace.SpanKindInternal),
 	)
 	defer func() {
-		if err != nil {
-			span.SetStatus(codes.Error, err.Error())
+		newAttrs := []attribute.KeyValue{
+			attribute.String("postgres.func", "bulk_update"),
 		}
+		if err != nil {
+			var code string
+			code, err = tryErrToPostgresError(err, p.IsPgx())
+			span.SetStatus(codes.Error, err.Error())
+			if code != "" {
+				newAttrs = append(newAttrs, attribute.String("postgres.err_code", code))
+			}
+		}
+		if errRecord := p.recordMetrics(ctx, mt, newAttrs); errRecord != nil {
+			err = errors.Join(err, errRecord)
+		}
+		span.SetAttributes(newAttrs...)
 		span.End()
 	}()
 	if p.tx != nil {

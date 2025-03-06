@@ -28,7 +28,7 @@ import (
 )
 
 type Postgres struct {
-	config ConnectConfig
+	config *ConnectConfig
 	// tracer stores the pointer to the tracer configuration as we pass the tracer configuration everywhere.
 	// We don't use pointer of the TracerConfig inside the ConnectConfig because the configuration can be copied
 	// outside of the postgres package.
@@ -49,10 +49,8 @@ type Postgres struct {
 	searchPathMu sync.RWMutex
 	searchPath   string // default schema separated by comma.
 	// closeMu protects closing postgres connection concurrently.
-	closeMu sync.Mutex
-	closed  bool
-	// withMetrics enables the metrics collection in every query
-	withMetrics bool
+	closeMu     sync.Mutex
+	closed      bool
 	metricsName string
 }
 
@@ -68,7 +66,7 @@ func (p *Postgres) InTransaction() (ok bool, iso sql.IsolationLevel) {
 
 // Config returns the copy of connection configuration.
 func (p *Postgres) Config() ConnectConfig {
-	return p.config
+	return *p.config
 }
 
 // NewConfigFromDSN creates a new connect configuration from postgresql data source name.
@@ -131,7 +129,9 @@ func Connect(ctx context.Context, config ConnectConfig) (*Postgres, error) {
 
 	monitorCtx, cancel := context.WithCancel(context.Background())
 	p := &Postgres{
-		config:          config,
+		// We copy the configuration because we are copying the Postgres object in every transactions and with metrics calls. And a direct
+		// copy of the configuration struct will use quite a bit of memory.
+		config:          &config,
 		tracer:          &config.TracerConfig,
 		meter:           &config.MeterConfig,
 		db:              db,
@@ -462,6 +462,7 @@ func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc 
 		pgx:         p.pgx,
 		tx:          tx,
 		tracer:      p.tracer,
+		meter:       p.meter,
 		txIso:       iso,
 		metricsName: p.metricsName,
 	}
@@ -695,26 +696,38 @@ func (p *Postgres) collectStats(ctx context.Context, idleConns, openConns, inUse
 // )
 //
 // From above example, the package will produce four(4) histogram metrics:
-// ^
-// |  <========================= 1. Transact ========================>
-// |    <==== 2. Query ====>
-// |                         <==== 3. Query ====>
-// |                                              <==== 4. Exec ====>
-// |
-// |-------------------------------------------------------------------> Time
+//
+// Operations
+//    ^
+//    |  <========================= 1. Transact ========================>
+//    |    <==== 2. Query ====>
+//    |                         <==== 3. Query ====>
+//    |                                              <==== 4. Exec ====>
+//    |
+//    |-------------------------------------------------------------------> Time
+//
 // And from these four(4) metrics you will find that all "metrics_name" will be the same, so you can easily find all the metrics that have the same name
 // to know more about on how the actual execution is being made.
 func (p *Postgres) WithMetrics(ctx context.Context, name string, fn func(context.Context, *Postgres) error) (err error) {
 	if name == "" {
 		return errors.New("name cannot be empty to collect metrics")
 	}
+	metricsName := name
+	// If the current postgres object metrics name is not emptym, then we should append the current metrics name with the upcoming metrics name.
+	// So if the previous object have name of transactLedger and the upcoming metrics is createMovement, then the name will be transactLedger.createMovement.
+	if p.metricsName != "" {
+		metricsName = p.metricsName + "." + metricsName
+	}
 	pg := &Postgres{
-		tracer:      p.tracer,
+		closed:      p.closed,
+		searchPath:  p.searchPath,
 		db:          p.db,
 		pgx:         p.pgx,
 		tx:          p.tx,
+		tracer:      p.tracer,
+		meter:       p.meter,
 		txIso:       p.txIso,
-		metricsName: name,
+		metricsName: metricsName,
 	}
 	return fn(ctx, pg)
 }
@@ -732,7 +745,7 @@ func (p *Postgres) recordMetrics(ctx context.Context, t time.Time, attributes []
 	}
 	// Set the operation name as one of the label for the metrics. The cardinality of the metrics will be as much
 	// as the number of metrics name.
-	attrs = append(attrs, attribute.String("operation.name", p.metricsName))
+	attrs = append(attrs, attribute.String("execution.name", p.metricsName))
 
 	histogram, err := p.meter.Meter.Float64Histogram("postgres.query_execution")
 	if err != nil {

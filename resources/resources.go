@@ -210,11 +210,13 @@ func (r *Resources) new(ctx context.Context) error {
 				"[resources] Found grpc servers configuration, creating gRPC servers...",
 				slog.Int("grpc_servers_config", len(r.config.GRPC.ServerResources)),
 			)
-			err := r.config.GRPC.createGRPCServers(ctx, grpcResources)
+			// The GRPC gateway need to be created first, because when we are creating the grpc servers we will check whether the grpc gateway
+			// for the server is exists. If it exists, then we will attatch the grpc gateway server to the grpc server object.
+			err := r.config.GRPC.createGRPCGateway(ctx, grpcResources)
 			if err != nil {
 				return err
 			}
-			err = r.config.GRPC.createGRPCGateway(ctx, grpcResources)
+			err = r.config.GRPC.createGRPCServers(ctx, grpcResources)
 			if err != nil {
 				return err
 			}
