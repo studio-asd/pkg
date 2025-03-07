@@ -288,7 +288,7 @@ type Runner struct {
 	flags *Flags
 	// testConfFn is the function that will be triggered when --test-config flag is defined.
 	testConfFn func(Context) error
-	//onExitFn is the function that will be triggered when the runner is exiting.
+	// onExitFn is the function that will be triggered when the runner is exiting.
 	onExitFn func(context.Context, error) error
 }
 
@@ -546,7 +546,6 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 		if !isError(returnedErr) {
 			return
 		}
-
 	}()
 
 	parentCtx := r.ctx

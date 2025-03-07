@@ -692,8 +692,8 @@ func (p *Postgres) collectStats(ctx context.Context, idleConns, openConns, inUse
 //	Query
 //	Query
 //	Exec
-*/
 // )
+*/
 //
 // From above example, the package will produce four(4) histogram metrics:
 //

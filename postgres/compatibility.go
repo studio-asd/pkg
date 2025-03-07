@@ -29,7 +29,6 @@ func (r *RowsCompat) Close() error {
 func (r *RowsCompat) Err() (err error) {
 	defer func() {
 		_, err = tryErrToPostgresError(err, r.pgxRows != nil)
-		return
 	}()
 	if r.pgxRows != nil {
 		err = r.pgxRows.Err()

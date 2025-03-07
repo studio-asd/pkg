@@ -161,7 +161,7 @@ func (r *Resources) Stop(ctx context.Context) error {
 	var errs error
 	if r.container.grpc != nil {
 		if err := r.container.grpc.stop(ctx); err != nil {
-			err = errors.Join(errs, err)
+			errs = errors.Join(errs, err)
 		}
 	}
 

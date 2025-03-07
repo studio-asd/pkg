@@ -142,6 +142,10 @@ func (g *GRPCServerObject) RegisterService(fn func(s grpc.ServiceRegistrar)) {
 	g.server.RegisterService(fn)
 }
 
+func (g *GRPCServerObject) RegisterGatewayService(fn func(mux *runtime.ServeMux) error) {
+	g.grpcGateway.AddServiceHandler(fn)
+}
+
 func (g *grpcServerResources) isEmpty() bool {
 	g.mu.Lock()
 	l := len(g.servers)
@@ -525,12 +529,12 @@ type GRPCGatewayObject struct {
 	runtimeMux    *runtime.ServeMux
 
 	mu                sync.Mutex
-	servicesHandlerFn []func(ctx context.Context, mux *runtime.ServeMux, endpoint string, opts []grpc.DialOption) (err error)
+	servicesHandlerFn []func(*runtime.ServeMux) error
 	httpServer        *httpserver.Server
 	address           string
 }
 
-func (g *GRPCGatewayObject) AddServiceHandler(fn func(ctx context.Context, mux *runtime.ServeMux, endpoint string, opts []grpc.DialOption) (err error)) {
+func (g *GRPCGatewayObject) AddServiceHandler(fn func(mux *runtime.ServeMux) error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.servicesHandlerFn = append(g.servicesHandlerFn, fn)
@@ -545,6 +549,12 @@ func (g *GRPCGatewayObject) init(ctx srun.Context) error {
 }
 
 func (g *GRPCGatewayObject) run(ctx context.Context) error {
+	for _, fn := range g.servicesHandlerFn {
+		if err := fn(g.runtimeMux); err != nil {
+			return err
+		}
+	}
+	g.httpServer.SetHandler(g.runtimeMux)
 	return g.httpServer.Run(ctx)
 }
 
