@@ -36,8 +36,8 @@ func New(dir string) (*Git, error) {
 }
 
 // RepositoryRoot returns the path of root repository using git command.
-func (g *Git) RepositoryRoot() (string, error) {
-	cmd := exec.CommandContext(context.Background(), "git", "rev-parse", "--show-toplevel")
+func (g *Git) RepositoryRoot(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
 	cmd.Dir = g.dir
 
 	out, err := cmd.Output()

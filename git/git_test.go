@@ -7,7 +7,7 @@ func TestRepositoryRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := g.RepositoryRoot()
+	out, err := g.RepositoryRoot(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}

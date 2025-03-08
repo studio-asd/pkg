@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 
 	"github.com/studio-asd/pkg/grpc/client"
 	grpcserver "github.com/studio-asd/pkg/grpc/server"
@@ -142,8 +144,11 @@ func (g *GRPCServerObject) RegisterService(fn func(s grpc.ServiceRegistrar)) {
 	g.server.RegisterService(fn)
 }
 
-func (g *GRPCServerObject) RegisterGatewayService(fn func(mux *runtime.ServeMux) error) {
-	g.grpcGateway.AddServiceHandler(fn)
+func (g *GRPCServerObject) RegisterGatewayService(fn func(gateway *GRPCGatewayObject) error) error {
+	if err := fn(g.grpcGateway); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (g *grpcServerResources) isEmpty() bool {
@@ -517,7 +522,6 @@ func (g *GRPCGatewayResourceConfig) create(serverAddress string) (*GRPCGatewayOb
 		return nil, err
 	}
 	return &GRPCGatewayObject{
-		runtimeMux:    runtime.NewServeMux(),
 		httpServer:    s,
 		address:       g.Address,
 		serverAddress: serverAddress,
@@ -526,35 +530,89 @@ func (g *GRPCGatewayResourceConfig) create(serverAddress string) (*GRPCGatewayOb
 
 type GRPCGatewayObject struct {
 	serverAddress string
-	runtimeMux    *runtime.ServeMux
 
-	mu                sync.Mutex
+	mu         sync.Mutex
+	httpServer *httpserver.Server
+	address    string
+
+	middlewares     []runtime.Middleware
+	errorHandler    runtime.ErrorHandlerFunc
+	metadataHandler func(context.Context, *http.Request) metadata.MD
+	// While using endpoint is indeed recommended by the grpc-gateway document, but we don't want to use it because of performance
+	// and complexities that introduced by it as we mainly use the grpc-gateway to expose our internal APIs to the outside world.
+	//
+	// By doing so, we are automatically exposing three kind of metrics related to grpc-gateway only:
+	// 1. The http server.
+	// 2. The grpc client.
+	// 3. The grpc server.
+	//
+	// We don't want this and only want the http server metrics to be exported, thus reducing the complexity of the metrics,
+	// the program memory consumption and overall the time needed to GC the memory.
 	servicesHandlerFn []func(*runtime.ServeMux) error
-	httpServer        *httpserver.Server
-	address           string
 }
 
-func (g *GRPCGatewayObject) AddServiceHandler(fn func(mux *runtime.ServeMux) error) {
+func (g *GRPCGatewayObject) RegisterMetadataHandler(fn func(context.Context, *http.Request) metadata.MD) {
+	g.mu.Lock()
+	g.metadataHandler = fn
+	g.mu.Unlock()
+}
+
+func (g *GRPCGatewayObject) RegisterErrorHandler(fn runtime.ErrorHandlerFunc) {
+	g.mu.Lock()
+	g.errorHandler = fn
+	g.mu.Unlock()
+}
+
+func (g *GRPCGatewayObject) RegisterMiddleware(middlewares ...runtime.Middleware) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.middlewares == nil {
+		g.middlewares = middlewares
+		return
+	}
+	g.middlewares = append(g.middlewares, middlewares...)
+}
+
+func (g *GRPCGatewayObject) RegisterServiceHandler(fn func(mux *runtime.ServeMux) error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.servicesHandlerFn = append(g.servicesHandlerFn, fn)
 }
 
-func (g *GRPCGatewayObject) Mux() *runtime.ServeMux {
-	return g.runtimeMux
-}
-
 func (g *GRPCGatewayObject) init(ctx srun.Context) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	return g.httpServer.Init(ctx)
 }
 
 func (g *GRPCGatewayObject) run(ctx context.Context) error {
+	var (
+		middlewares     []runtime.Middleware
+		errorHandler    runtime.ErrorHandlerFunc
+		metadataHandler func(context.Context, *http.Request) metadata.MD
+	)
+	if g.middlewares != nil {
+		middlewares = g.middlewares
+	}
+	if g.errorHandler != nil {
+		errorHandler = g.errorHandler
+	}
+	if g.metadataHandler != nil {
+		metadataHandler = g.metadataHandler
+	}
+
+	mux := runtime.NewServeMux(
+		runtime.WithMiddlewares(middlewares...),
+		runtime.WithErrorHandler(errorHandler),
+		runtime.WithMetadata(metadataHandler),
+		runtime.WithWriteContentLength(),
+	)
 	for _, fn := range g.servicesHandlerFn {
-		if err := fn(g.runtimeMux); err != nil {
+		if err := fn(mux); err != nil {
 			return err
 		}
 	}
-	g.httpServer.SetHandler(g.runtimeMux)
+	g.httpServer.SetHandler(mux)
 	return g.httpServer.Run(ctx)
 }
 

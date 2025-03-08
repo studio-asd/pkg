@@ -646,12 +646,25 @@ func monitorPostgresStats(ctx context.Context, p *Postgres) error {
 	if err != nil {
 		return err
 	}
+
+	collect := func(ctx context.Context, idleConns, openConns, inUseConns metric.Int64Counter, p *Postgres) {
+		if p.pgx != nil {
+			idleConns.Add(ctx, int64(p.pgx.Stat().IdleConns()))
+			openConns.Add(ctx, int64(p.pgx.Stat().MaxConns()))
+			inUseConns.Add(ctx, p.pgx.Stat().AcquireCount())
+		} else {
+			idleConns.Add(ctx, int64(p.db.Stats().Idle))
+			openConns.Add(ctx, int64(p.db.Stats().MaxOpenConnections))
+			inUseConns.Add(ctx, int64(p.db.Stats().InUse))
+		}
+	}
 	// Collect the stats for the first time so we don't have empty stats when the program starts.
-	p.collectStats(
+	collect(
 		ctx,
 		idleConns,
 		openConns,
 		inUseConns,
+		p,
 	)
 
 	for {
@@ -659,25 +672,14 @@ func monitorPostgresStats(ctx context.Context, p *Postgres) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			p.collectStats(
+			collect(
 				ctx,
 				idleConns,
 				openConns,
 				inUseConns,
+				p,
 			)
 		}
-	}
-}
-
-func (p *Postgres) collectStats(ctx context.Context, idleConns, openConns, inUseConns metric.Int64Counter) {
-	if p.pgx != nil {
-		idleConns.Add(ctx, int64(p.pgx.Stat().IdleConns()))
-		openConns.Add(ctx, int64(p.pgx.Stat().MaxConns()))
-		inUseConns.Add(ctx, p.pgx.Stat().AcquireCount())
-	} else {
-		idleConns.Add(ctx, int64(p.db.Stats().Idle))
-		openConns.Add(ctx, int64(p.db.Stats().MaxOpenConnections))
-		inUseConns.Add(ctx, int64(p.db.Stats().InUse))
 	}
 }
 
