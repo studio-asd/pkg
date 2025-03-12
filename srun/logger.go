@@ -1,11 +1,14 @@
 package srun
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/studio-asd/pkg/instrumentation"
 )
 
 const (
@@ -115,10 +118,23 @@ func setDefaultSlog(config LoggerConfig) {
 			},
 		)
 	}
-	logger := slog.New(handler).With(
+	// Creates a new context handler that extracts the context attributes from the context and adds them to the log record.
+	contextHandler := &slogContextHandler{Handler: handler}
+	logger := slog.New(contextHandler).With(
 		slog.String(loggerAppNameKey, config.appName),
 		slog.String(loggerAppVersionKey, config.appVersion),
 		slog.String(loggerGoVersionKey, config.goVersion),
 	)
 	slog.SetDefault(logger)
+}
+
+// slogContextHandler extracts the context attributes from the context and adds them to the log record.
+type slogContextHandler struct {
+	slog.Handler
+}
+
+func (h *slogContextHandler) Handle(ctx context.Context, record slog.Record) error {
+	bg := instrumentation.BaggageFromContext(ctx)
+	record.AddAttrs(bg.ToSlogAttributes()...)
+	return h.Handler.Handle(ctx, record)
 }

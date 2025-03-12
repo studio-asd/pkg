@@ -100,6 +100,14 @@ func tryErrToPostgresError(err error, isPgx bool) (string, error) {
 	}
 	// Join the errors so errors.Is and errors.As behave the same with the first error while keeping the internal
 	// type to be checked via errors.Is.
+	// //
+	// This have drawbacks where we have a duplicated error text. For example:
+	//
+	// [code: 23505] unique violation error
+	// [code: 23505] unique violation error
+	// ERROR: duplicate key value violates unique constraint "accounts_pkey" (SQLSTATE 23505)
+	//
+	// The first one is from the package's internal error, and the second one is from the PostgreSQL driver error.
 	pgErr = errors.Join(pgErr, err)
 	return code, pgErr
 }

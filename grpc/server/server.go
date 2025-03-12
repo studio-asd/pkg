@@ -10,7 +10,6 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/stats/opentelemetry"
 
@@ -57,11 +56,6 @@ func (s *Server) Init(ctx srun.Context) error {
 	s.listener = listener
 	s.logger = ctx.Logger
 
-	var metricAttrs []attribute.KeyValue
-	if s.config.Meter.DefaultAttributes != nil {
-		metricAttrs = s.config.Meter.DefaultAttributes
-	}
-
 	otelServerOption := opentelemetry.ServerOption(opentelemetry.Options{
 		MetricsOptions: opentelemetry.MetricsOptions{
 			MeterProvider: otel.GetMeterProvider(),
@@ -74,7 +68,8 @@ func (s *Server) Init(ctx srun.Context) error {
 		grpc.WaitForHandlers(true),
 		// StatsHandler is used to export prometheus metrics for grpc handlers.
 		grpc.StatsHandler(otelgrpc.NewServerHandler(
-			otelgrpc.WithMetricAttributes(metricAttrs...),
+			otelgrpc.WithMetricAttributes(s.config.Meter.DefaultAttributes...),
+			otelgrpc.WithSpanAttributes(s.config.Trace.DefaultAttributes...),
 		)),
 	)
 	if s.config.Trace.Tracer == nil {

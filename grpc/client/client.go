@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -39,7 +40,10 @@ func New(ctx context.Context, c Config) (*grpc.ClientConn, error) {
 			PermitWithoutStream: true,
 		}),
 		grpc.WithDefaultServiceConfig(grpcServiceConfig),
-		grpc.WithStatsHandler(nil),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler(
+			otelgrpc.WithMetricAttributes(c.DefaultAttributes...),
+			otelgrpc.WithSpanAttributes(c.DefaultAttributes...),
+		)),
 	)
 	if err != nil {
 		return nil, err

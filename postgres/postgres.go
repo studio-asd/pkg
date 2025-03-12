@@ -336,8 +336,8 @@ type Transaction interface {
 	Exec(ctx context.Context, query string, params ...any) (*ExecResultCompat, error)
 	QueryRow(ctx context.Context, query string, params ...any) *RowCompat
 	Query(ctx context.Context, query string, params ...any) (*RowsCompat, error)
-	SpanAttributes() []attribute.KeyValue
 	Prepare(ctx context.Context, query string) (*StmtCompat, error)
+	SpanAttributes() []attribute.KeyValue
 }
 
 func (p *Postgres) Transact(ctx context.Context, iso sql.IsolationLevel, txFunc func(context.Context, *Postgres) error) error {
@@ -715,12 +715,13 @@ func (p *Postgres) WithMetrics(ctx context.Context, name string, fn func(context
 		return errors.New("name cannot be empty to collect metrics")
 	}
 	metricsName := name
-	// If the current postgres object metrics name is not emptym, then we should append the current metrics name with the upcoming metrics name.
+	// If the current postgres object metrics name is not empty, then we should append the current metrics name with the upcoming metrics name.
 	// So if the previous object have name of transactLedger and the upcoming metrics is createMovement, then the name will be transactLedger.createMovement.
 	if p.metricsName != "" {
 		metricsName = p.metricsName + "." + metricsName
 	}
 	pg := &Postgres{
+		config:      p.config,
 		closed:      p.closed,
 		searchPath:  p.searchPath,
 		db:          p.db,
