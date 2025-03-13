@@ -5,10 +5,12 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/studio-asd/pkg/instrumentation"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
+
+	"github.com/studio-asd/pkg/instrumentation"
 )
 
 type (
@@ -116,15 +118,30 @@ func (m *Mux) handlerFunc(method, pattern string, handler HandlerFunc) {
 	// Create a OtelHandler and wrap everything around it to monitor the http requests.
 	otelHandler := otelhttp.NewHandler(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			rwDelegator := newResponseWriterDelegator(pattern, w)
-			handler(rwDelegator, r)
+			bg := instrumentation.Baggage{
+				HTTPMethod:         r.Method,
+				HTTPRequestPattern: r.Pattern,
+			}
+			ctx := instrumentation.ContextWithBaggage(r.Context(), bg)
+			r = r.WithContext(ctx)
+			handler(w, r)
 		}),
 		pattern,
 		otelhttp.WithMetricAttributesFn(func(r *http.Request) []attribute.KeyValue {
-			return instrumentation.BaggageFromContext(r.Context()).ToOpenTelemetryAttributesForMetrics()
+			// The metrics attributes is very sensitive to metrics cardinality. Please ensure that we do
+			// not explode the cardinality.
+			attrs := []attribute.KeyValue{
+				attribute.String("http.request.pattern", r.Pattern),
+				attribute.String("http.request.method", r.Method),
+			}
+			attrs = append(attrs, instrumentation.BaggageFromContext(r.Context()).ToOpenTelemetryAttributesForMetrics()...)
+			return attrs
 		}),
 		otelhttp.WithTracerProvider(otel.GetTracerProvider()),
 		otelhttp.WithMeterProvider(otel.GetMeterProvider()),
+		otelhttp.WithPropagators(
+			propagation.NewCompositeTextMapPropagator(propagation.Baggage{}, propagation.TraceContext{}),
+		),
 	)
 	// Since go v1.22.0 it is now possible to route the handler using "{METHOD} + {pattern}". For example, "GET /v1/some/endpoint".
 	// And it also handles the wildcard within pattern like "GET /v1/some/endpoint/{id}".

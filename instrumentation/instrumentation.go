@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/baggage"
 )
 
 const (
@@ -23,6 +24,16 @@ const (
 	preferredLanguageInst = "inst-preferred-language"
 )
 
+const (
+	httpRequestPatternName = "http.request.pattern"
+	httpRequestMethodName  = "http.request.method"
+	requestIDName          = "request.id"
+	apiNameName            = "api.name"
+	apiOwnerName           = "api.owner"
+	debugIDName            = "debug.id"
+	preferredLanguageName  = "language.preferred"
+)
+
 // baggageKey is the struct key that is used to store Baggage information inside context.Context.
 var baggageKey struct{}
 
@@ -32,11 +43,13 @@ var baggageKey struct{}
 // Please NOTE that not all headers/metadata are included in the instrumentation, because we
 // only ensure we have something that need to be propageted consistently across multiple services.
 type Baggage struct {
-	RequestID         string // RequestID is the unique id for every request.
-	APIName           string // APIname is the BFF api name for the request.
-	APIOwner          string // APIOwner is the BFF api owner for the request.
-	DebugID           string // DebugID is a special id to identify a debug request.
-	PreferredLanguage string // PreferredLanguage is a parameter for the langauge usage.
+	HTTPMethod         string
+	HTTPRequestPattern string
+	RequestID          string // RequestID is the unique id for every request.
+	APIName            string // APIname is the BFF api name for the request.
+	APIOwner           string // APIOwner is the BFF api owner for the request.
+	DebugID            string // DebugID is a special id to identify a debug request.
+	PreferredLanguage  string // PreferredLanguage is a parameter for the langauge usage.
 	// valid is a flag to check whether the baggage is a valid baggage that created from the
 	// http header, gRPC metadata or something else that supported in the instrumentation package.
 	valid bool
@@ -51,24 +64,27 @@ func (b Baggage) ToSlogAttributes() []slog.Attr {
 	if !b.valid {
 		return []slog.Attr{}
 	}
-	return []slog.Attr{
-		{
-			Key:   "request.id",
-			Value: slog.StringValue(b.RequestID),
-		},
-		{
-			Key:   "api.name",
-			Value: slog.StringValue(b.APIName),
-		},
-		{
-			Key:   "api.owner",
-			Value: slog.StringValue(b.APIOwner),
-		},
-		{
-			Key:   "debug.id",
-			Value: slog.StringValue(b.DebugID),
-		},
+
+	var attrs []slog.Attr
+	if b.HTTPRequestPattern != "" {
+		attrs = append(attrs, slog.String(httpRequestPatternName, b.HTTPRequestPattern))
 	}
+	if b.HTTPMethod != "" {
+		attrs = append(attrs, slog.String(httpRequestMethodName, b.HTTPMethod))
+	}
+	if b.RequestID != "" {
+		attrs = append(attrs, slog.String(requestIDName, b.RequestID))
+	}
+	if b.APIName != "" {
+		attrs = append(attrs, slog.String(apiNameName, b.APIName))
+	}
+	if b.APIOwner != "" {
+		attrs = append(attrs, slog.String(apiOwnerName, b.APIOwner))
+	}
+	if b.DebugID != "" {
+		attrs = append(attrs, slog.String(debugIDName, b.DebugID))
+	}
+	return attrs
 }
 
 // ToTextMapCarrier transform the baggage into map[string]string as the carrier.
@@ -105,9 +121,19 @@ func (b Baggage) ToOpenTelemetryAttributesForMetrics() []attribute.KeyValue {
 	if !b.valid || b.Empty() {
 		return []attribute.KeyValue{}
 	}
-	attrs := []attribute.KeyValue{
-		attribute.String("api.name", b.APIName),
-		attribute.String("api.owner", b.APIOwner),
+
+	var attrs []attribute.KeyValue
+	if b.HTTPRequestPattern != "" {
+		attrs = append(attrs, attribute.String(httpRequestPatternName, b.HTTPRequestPattern))
+	}
+	if b.HTTPMethod != "" {
+		attrs = append(attrs, attribute.String(httpRequestMethodName, b.HTTPMethod))
+	}
+	if b.APIName != "" {
+		attrs = append(attrs, attribute.String(apiNameName, b.APIName))
+	}
+	if b.APIOwner != "" {
+		attrs = append(attrs, attribute.String(apiOwnerName, b.APIOwner))
 	}
 	return attrs
 }
@@ -117,10 +143,19 @@ func (b Baggage) ToOpenTelemetryAttributes() []attribute.KeyValue {
 	if !b.valid || b.Empty() {
 		return []attribute.KeyValue{}
 	}
-	attrs := []attribute.KeyValue{
-		attribute.String("api.request_id", b.RequestID),
-		attribute.String("api.name", b.APIName),
-		attribute.String("api.owner", b.APIOwner),
+
+	var attrs []attribute.KeyValue
+	if b.HTTPRequestPattern != "" {
+		attrs = append(attrs, attribute.String(httpRequestPatternName, b.HTTPRequestPattern))
+	}
+	if b.HTTPMethod != "" {
+		attrs = append(attrs, attribute.String(httpRequestMethodName, b.HTTPMethod))
+	}
+	if b.APIName != "" {
+		attrs = append(attrs, attribute.String(apiNameName, b.APIName))
+	}
+	if b.APIOwner != "" {
+		attrs = append(attrs, attribute.String(apiOwnerName, b.APIOwner))
 	}
 	if b.DebugID != "" {
 		attrs = append(attrs, attribute.String("api.debug_id", b.DebugID))
@@ -148,16 +183,48 @@ func BaggageFromTextMapCarrier(carrier map[string]string) Baggage {
 
 // BaggageFromContext returns the insturmented bagage from a context.Context.
 func BaggageFromContext(ctx context.Context) Baggage {
-	baggage, ok := ctx.Value(baggageKey).(Baggage)
-	if !ok {
+	bg := baggage.FromContext(ctx)
+	if bg.Len() == 0 {
 		return Baggage{
 			empty: true,
 		}
 	}
-	return baggage
+
+	return Baggage{
+		RequestID:         bg.Member(requestIDName).Value(),
+		APIName:           bg.Member(apiNameName).Value(),
+		APIOwner:          bg.Member(apiOwnerName).Value(),
+		DebugID:           bg.Member(debugIDName).Value(),
+		PreferredLanguage: bg.Member(preferredLanguageName).Value(),
+		valid:             true,
+		empty:             false,
+	}
 }
 
 // ContextWithBaggage set the context key using the passed baggage value.
 func ContextWithBaggage(ctx context.Context, bg Baggage) context.Context {
-	return context.WithValue(ctx, baggageKey, bg)
+	var members []baggage.Member
+	if bg.RequestID != "" {
+		ridMem, _ := baggage.NewMember(requestIDName, bg.RequestID)
+		members = append(members, ridMem)
+	}
+	if bg.APIName != "" {
+		apiNameMem, _ := baggage.NewMember(apiNameName, bg.APIName)
+		members = append(members, apiNameMem)
+	}
+	if bg.APIOwner != "" {
+		apiOwnerMem, _ := baggage.NewMember(apiOwnerName, bg.APIOwner)
+		members = append(members, apiOwnerMem)
+	}
+	if bg.DebugID != "" {
+		debugIDMem, _ := baggage.NewMember(debugIDName, bg.DebugID)
+		members = append(members, debugIDMem)
+	}
+	if bg.PreferredLanguage != "" {
+		preferredLangMem, _ := baggage.NewMember(preferredLanguageName, bg.PreferredLanguage)
+		members = append(members, preferredLangMem)
+	}
+	otelBg, _ := baggage.New(members...)
+	newCtx := baggage.ContextWithBaggage(ctx, otelBg)
+	return newCtx
 }

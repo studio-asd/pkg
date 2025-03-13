@@ -5,15 +5,14 @@ import "os"
 var defaultTracer = os.Getenv("GOPKG_TRACER_DEFAULT")
 
 const (
-	// TraceOtel is the tracer instrumentation for open telemetry project.
-	TracerOtel    = "opentelemetry"
-	TracerDatadog = "datadog"
+	Otel    = "opentelemetry"
+	Datadog = "datadog"
 )
 
 // DefaultTracer returns the default tracer for the entire package.
-func DefaultTracer() string {
+func DefaultInstrumentation() string {
 	if defaultTracer == "" {
-		return TracerOtel
+		return Otel
 	}
 	return defaultTracer
 }

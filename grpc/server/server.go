@@ -10,6 +10,7 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/stats/opentelemetry"
 
@@ -70,6 +71,9 @@ func (s *Server) Init(ctx srun.Context) error {
 		grpc.StatsHandler(otelgrpc.NewServerHandler(
 			otelgrpc.WithMetricAttributes(s.config.Meter.DefaultAttributes...),
 			otelgrpc.WithSpanAttributes(s.config.Trace.DefaultAttributes...),
+			otelgrpc.WithPropagators(
+				propagation.NewCompositeTextMapPropagator(propagation.Baggage{}, propagation.TraceContext{}),
+			),
 		)),
 	)
 	if s.config.Trace.Tracer == nil {

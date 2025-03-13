@@ -6,6 +6,7 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
@@ -43,6 +44,9 @@ func New(ctx context.Context, c Config) (*grpc.ClientConn, error) {
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler(
 			otelgrpc.WithMetricAttributes(c.DefaultAttributes...),
 			otelgrpc.WithSpanAttributes(c.DefaultAttributes...),
+			otelgrpc.WithPropagators(
+				propagation.NewCompositeTextMapPropagator(propagation.Baggage{}, propagation.TraceContext{}),
+			),
 		)),
 	)
 	if err != nil {

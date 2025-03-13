@@ -1,10 +1,13 @@
 package client
 
 import (
+	"context"
 	"net/http"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 type Config struct {
@@ -17,9 +20,14 @@ type Client struct {
 }
 
 func New(config Config) *Client {
+	otel.GetTextMapPropagator().Extract(context.Background(), propagation.HeaderCarrier(http.Header{}))
+
 	httpClient := &http.Client{
 		Transport: otelhttp.NewTransport(
 			http.DefaultTransport,
+			otelhttp.WithPropagators(
+				propagation.NewCompositeTextMapPropagator(propagation.Baggage{}, propagation.TraceContext{}),
+			),
 		),
 	}
 	if config.Timeout > 0 {
