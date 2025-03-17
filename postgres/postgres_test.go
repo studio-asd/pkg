@@ -273,3 +273,30 @@ func TestInTtransaction(t *testing.T) {
 		})
 	}
 }
+
+func TestWithMetrics(t *testing.T) {
+	t.Parallel()
+
+	var metricsName string
+	expectMetricsName := "one.two.three"
+
+	p := &Postgres{}
+	err := p.WithMetrics(context.Background(), "one", func(ctx context.Context, p *Postgres) error {
+		p.WithMetrics(ctx, "two", func(ctx context.Context, p *Postgres) error {
+			p.WithMetrics(ctx, "three", func(ctx context.Context, p *Postgres) error {
+				// Assign the metrics name.
+				metricsName = p.metricsName
+				return nil
+			})
+			return nil
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if metricsName != expectMetricsName {
+		t.Errorf("expecting metrics name %s but got %s", expectMetricsName, metricsName)
+	}
+}

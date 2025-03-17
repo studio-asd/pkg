@@ -184,7 +184,7 @@ func (a *adminHTTPServer) handler() *http.ServeMux {
 	mux.HandleFunc("GET /debug/trace", func(w http.ResponseWriter, r *http.Request) {
 		pprof.Trace(w, r)
 	})
-	mux.HandleFunc("/debug/{name}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /debug/{name}", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		pprof.Handler(name).ServeHTTP(w, r)
 	})

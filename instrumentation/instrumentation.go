@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"os"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/baggage"
@@ -37,11 +38,26 @@ const (
 // baggageKey is the struct key that is used to store Baggage information inside context.Context.
 var baggageKey struct{}
 
+var defaultTracer = os.Getenv("GOPKG_INSTRUMENTATION_DEFAULT")
+
+const (
+	Otel    = "opentelemetry"
+	Datadog = "datadog"
+)
+
+// DefaultTracer returns the default tracer for the entire package.
+func DefaultInstrumentation() string {
+	if defaultTracer == "" {
+		return Otel
+	}
+	return defaultTracer
+}
+
 // Baggage is the instrumentation bagge that will be included in context.Context to ensure
 // all informations are propagated.
 //
-// Please NOTE that not all headers/metadata are included in the instrumentation, because we
-// only ensure we have something that need to be propageted consistently across multiple services.
+// When propagating information across multiple services and dependencies, baggage is transformed
+// into opentelemetry baggage format to ensure compatibility.
 type Baggage struct {
 	HTTPMethod         string
 	HTTPRequestPattern string

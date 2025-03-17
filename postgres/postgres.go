@@ -48,9 +48,16 @@ type Postgres struct {
 	// searchPathMu protects set of the searchpath.
 	searchPathMu sync.RWMutex
 	searchPath   string // default schema separated by comma.
+
+	// canClose indicates whether the postgres object can be closed or not.
+	// This flag should be set to true only in the parent object and not
+	// in the subsequent child objects.
+	canClose bool
 	// closeMu protects closing postgres connection concurrently.
-	closeMu     sync.Mutex
-	closed      bool
+	closeMu sync.Mutex
+	closed  bool
+
+	// metricsName enables metrics recording via OpenTelemetry.
 	metricsName string
 }
 
@@ -138,6 +145,7 @@ func Connect(ctx context.Context, config ConnectConfig) (*Postgres, error) {
 		pgx:             pgxdb,
 		searchPath:      config.SearchPath,
 		cancelMonitorFn: cancel,
+		canClose:        true,
 	}
 	// Start the monitoring goroutine if monitor configuration is on, we want to monitor the number of connections
 	// and the general stats of the postgres object.
@@ -595,6 +603,10 @@ func (p *Postgres) DefaultSearchPath() string {
 }
 
 func (p *Postgres) Close() (err error) {
+	if !p.canClose {
+		return errors.New("please close the PostgreSQL from the parent object")
+	}
+
 	p.closeMu.Lock()
 	if p.closed {
 		p.closeMu.Unlock()
