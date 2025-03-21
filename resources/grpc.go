@@ -10,7 +10,10 @@ import (
 	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -18,6 +21,7 @@ import (
 	"github.com/studio-asd/pkg/grpc/client"
 	grpcserver "github.com/studio-asd/pkg/grpc/server"
 	httpserver "github.com/studio-asd/pkg/http/server"
+	"github.com/studio-asd/pkg/instrumentation"
 	"github.com/studio-asd/pkg/srun"
 )
 
@@ -514,6 +518,7 @@ func (g *GRPCGatewayResourceConfig) create(serverAddress string) (*GRPCGatewayOb
 		return nil, errors.New("cannot craete grpc gateway with empty address")
 	}
 	s, err := httpserver.New(httpserver.Config{
+		Address:      g.Address,
 		Name:         fmt.Sprintf("%s-grpc-gateway", g.name),
 		WriteTimeout: time.Duration(g.writeTimeout),
 		ReadTimeout:  time.Duration(g.readTimeout),
@@ -587,24 +592,42 @@ func (g *GRPCGatewayObject) init(ctx srun.Context) error {
 
 func (g *GRPCGatewayObject) run(ctx context.Context) error {
 	var (
-		middlewares     []runtime.Middleware
-		errorHandler    runtime.ErrorHandlerFunc
-		metadataHandler func(context.Context, *http.Request) metadata.MD
+		middlewares = []runtime.Middleware{
+			// Always set the most bottom middleware to extract information for Open Telemetry. We need to retrieve the information from inside
+			// the grpc-gateway middleware because this information is non existent pre runtime.Mux.
+			func(hf runtime.HandlerFunc) runtime.HandlerFunc {
+				return func(w http.ResponseWriter, r *http.Request, pathParams map[string]string) {
+					pattern, ok := runtime.HTTPPattern(r.Context())
+					if !ok {
+						return
+					}
+					d, ok := r.Context().Value(otelHTTPInfoDelegatorKey).(*otelHTTPInfoDelegator)
+					if !ok {
+						return
+					}
+					d.HTTPPattern = pattern.String()
+					hf(w, r, pathParams)
+				}
+			},
+		}
+		errorHandler runtime.ErrorHandlerFunc
 	)
 	if g.middlewares != nil {
-		middlewares = g.middlewares
+		fmt.Println("APPEND MIDDLEWARE")
+		middlewares = append(middlewares, g.middlewares...)
 	}
 	if g.errorHandler != nil {
 		errorHandler = g.errorHandler
 	}
-	if g.metadataHandler != nil {
-		metadataHandler = g.metadataHandler
+
+	// If the error handler is nil, then we will set the default error handler.
+	if errorHandler == nil {
+		errorHandler = runtime.DefaultHTTPErrorHandler
 	}
 
 	mux := runtime.NewServeMux(
 		runtime.WithMiddlewares(middlewares...),
 		runtime.WithErrorHandler(errorHandler),
-		runtime.WithMetadata(metadataHandler),
 		runtime.WithWriteContentLength(),
 	)
 	for _, fn := range g.servicesHandlerFn {
@@ -612,10 +635,59 @@ func (g *GRPCGatewayObject) run(ctx context.Context) error {
 			return err
 		}
 	}
-	g.httpServer.SetHandler(mux)
+
+	// Wraps the runtime.Mux handler with the http.Handler that expose Open Telemetry metrics.
+	// Create a OtelHandler and wrap everything around it to monitor the http requests.
+	otelHandler := otelhttp.NewHandler(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mux.ServeHTTP(w, r)
+		}),
+		"grpc.gateway.handler",
+		otelhttp.WithMetricAttributesFn(func(r *http.Request) []attribute.KeyValue {
+			d, ok := r.Context().Value(otelHTTPInfoDelegatorKey).(*otelHTTPInfoDelegator)
+			if !ok {
+				return nil
+			}
+			attrs := []attribute.KeyValue{
+				attribute.String("http.request.pattern", d.HTTPPattern),
+				attribute.String("http.request.method", r.Method),
+			}
+			attrs = append(
+				attrs,
+				instrumentation.BaggageFromContext(r.Context()).ToOpenTelemetryAttributesForMetrics()...,
+			)
+			return attrs
+		}),
+		otelhttp.WithTracerProvider(otel.GetTracerProvider()),
+		otelhttp.WithMeterProvider(otel.GetMeterProvider()),
+		otelhttp.WithPropagators(
+			propagation.NewCompositeTextMapPropagator(propagation.Baggage{}, propagation.TraceContext{}),
+		),
+	)
+	wrappedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Put the OtelHTTPInfoDelegator to the context so the Open Telemetry handler can access it.
+		r = r.WithContext(context.WithValue(r.Context(), otelHTTPInfoDelegatorKey, &otelHTTPInfoDelegator{}))
+		otelHandler.ServeHTTP(w, r)
+	})
+	g.httpServer.SetHandler(wrappedHandler)
 	return g.httpServer.Run(ctx)
 }
 
 func (g *GRPCGatewayObject) stop(ctx context.Context) error {
 	return g.httpServer.Stop(ctx)
+}
+
+type contextKey struct{}
+
+// otelHTTPInfoDelegatorKey is the key used to store the OtelHTTPInfoDelegator object in the http request context.
+var otelHTTPInfoDelegatorKey contextKey = struct{}{}
+
+// OtelHTTPInfoDelegator is an object that delegated to the http request context to store the information
+// for the Open Telemetry instrumentation. This object is needed because we are wrapping the runtime.Mux
+// handler with the Open Telemetry handler, so the rich information cannot be received before the url
+// is being routed to the handler. In order to keep the rich information, we need to store it in the context,
+// pass it to the open telemetry handler, and somehow retrieve the object back with the injected information.
+// While this is complex and eats more memory, a workaround currently is not available so we need to use this.
+type otelHTTPInfoDelegator struct {
+	HTTPPattern string
 }

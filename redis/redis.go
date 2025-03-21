@@ -9,6 +9,7 @@ import (
 
 	"github.com/redis/go-redis/extra/redisotel/v9"
 	rd "github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -80,16 +81,19 @@ func (c Config) buildRedisOptions() (*rd.Options, error) {
 }
 
 func New(config Config) (*rd.Client, error) {
-	client := rd.NewClient(&rd.Options{
-		// Ping the redis when the connection is established.
-		OnConnect: func(ctx context.Context, cn *rd.Conn) error {
-			status := cn.Ping(ctx)
-			if err := status.Err(); err != nil {
-				return err
-			}
-			return nil
-		},
-	})
+	opts, err := config.buildRedisOptions()
+	if err != nil {
+		return nil, err
+	}
+	// Ping the redis when the connection is established.
+	opts.OnConnect = func(ctx context.Context, cn *rd.Conn) error {
+		status := cn.Ping(ctx)
+		if err := status.Err(); err != nil {
+			return err
+		}
+		return nil
+	}
+	client := rd.NewClient(opts)
 
 	defaultAttrs := []attribute.KeyValue{
 		attribute.String("operation_name", "redis_command"),
@@ -100,6 +104,7 @@ func New(config Config) (*rd.Client, error) {
 		redisotel.WithAttributes(
 			defaultAttrs...,
 		),
+		redisotel.WithTracerProvider(otel.GetTracerProvider()),
 	); err != nil {
 		return nil, err
 	}
@@ -108,6 +113,7 @@ func New(config Config) (*rd.Client, error) {
 		redisotel.WithAttributes(
 			defaultAttrs...,
 		),
+		redisotel.WithMeterProvider(otel.GetMeterProvider()),
 	); err != nil {
 		return nil, err
 	}

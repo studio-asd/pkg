@@ -278,7 +278,7 @@ func TestWithMetrics(t *testing.T) {
 	t.Parallel()
 
 	var metricsName string
-	expectMetricsName := "one.two.three"
+	expectMetricsName := "three"
 
 	p := &Postgres{}
 	err := p.WithMetrics(context.Background(), "one", func(ctx context.Context, p *Postgres) error {

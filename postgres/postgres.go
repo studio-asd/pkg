@@ -698,9 +698,9 @@ func monitorPostgresStats(ctx context.Context, p *Postgres) error {
 // WithMetrics records the duration of function execution inside the fn. The function will only records metrics if the metrics name is not empty
 // otherwise it will return a nil error.
 //
-// The metrics function is designed to records metrics across queries wrapped inside the WithMetrics scope. It will automatically propagates the
-// metrics name into other cloned Postgres object to ensure all operations within the WithMetrics function has the same metrics name. The same metricsName
-// across all operations are intended to ensure the users to have useful information across their executions. Do consider this case:
+// The metrics function is designed to record metrics with the name passed to the function. If the previous Postgres object happen to have a metrics name
+// then the metrics name will be replaced with the new metrics name. This to ensure that we are not blowing the cardinality of the metrics.
+// For example:
 //
 /* Transact (
 //	Query
@@ -720,17 +720,11 @@ func monitorPostgresStats(ctx context.Context, p *Postgres) error {
 //    |
 //    |-------------------------------------------------------------------> Time
 //
-// And from these four(4) metrics you will find that all "metrics_name" will be the same, so you can easily find all the metrics that have the same name
-// to know more about on how the actual execution is being made.
+// And from these four(4) metrics you fill find metrics with different-different names if each Query and Exec
+// block is wrapped with Withmetrics function.
 func (p *Postgres) WithMetrics(ctx context.Context, name string, fn func(context.Context, *Postgres) error) (err error) {
 	if name == "" {
 		return errors.New("name cannot be empty to collect metrics")
-	}
-	metricsName := name
-	// If the current postgres object metrics name is not empty, then we should append the current metrics name with the upcoming metrics name.
-	// So if the previous object have name of transactLedger and the upcoming metrics is createMovement, then the name will be transactLedger.createMovement.
-	if p.metricsName != "" {
-		metricsName = p.metricsName + "." + metricsName
 	}
 	pg := &Postgres{
 		config:      p.config,
@@ -742,7 +736,7 @@ func (p *Postgres) WithMetrics(ctx context.Context, name string, fn func(context
 		tracer:      p.tracer,
 		meter:       p.meter,
 		txIso:       p.txIso,
-		metricsName: metricsName,
+		metricsName: name,
 	}
 	return fn(ctx, pg)
 }
