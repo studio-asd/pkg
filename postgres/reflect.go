@@ -55,7 +55,7 @@ func structScannerForType[T any]() func(p *T) []any {
 
 	// Collect the numbers of the exported fields.
 	var fieldInfos []fieldInfo
-	for i := 0; i < t.NumField(); i++ {
+	for i := range t.NumField() {
 		r, _ := utf8.DecodeRuneInString(t.Field(i).Name)
 		if unicode.IsUpper(r) {
 			fieldInfos = append(fieldInfos, fieldInfo{i, t.Field(i).Type.Kind()})

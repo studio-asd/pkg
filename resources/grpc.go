@@ -610,14 +610,17 @@ func (g *GRPCGatewayObject) run(ctx context.Context) error {
 				}
 			},
 		}
-		errorHandler runtime.ErrorHandlerFunc
+		errorHandler    runtime.ErrorHandlerFunc
+		metadataHandler func(context.Context, *http.Request) metadata.MD
 	)
 	if g.middlewares != nil {
-		fmt.Println("APPEND MIDDLEWARE")
 		middlewares = append(middlewares, g.middlewares...)
 	}
 	if g.errorHandler != nil {
 		errorHandler = g.errorHandler
+	}
+	if g.metadataHandler != nil {
+		metadataHandler = g.metadataHandler
 	}
 
 	// If the error handler is nil, then we will set the default error handler.
@@ -629,6 +632,7 @@ func (g *GRPCGatewayObject) run(ctx context.Context) error {
 		runtime.WithMiddlewares(middlewares...),
 		runtime.WithErrorHandler(errorHandler),
 		runtime.WithWriteContentLength(),
+		runtime.WithMetadata(metadataHandler),
 	)
 	for _, fn := range g.servicesHandlerFn {
 		if err := fn(mux); err != nil {

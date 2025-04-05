@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"database/sql"
 	"errors"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -9,6 +10,7 @@ import (
 
 // PostgreSQL error codes and definition taken from https://www.postgresql.org/docs/current/errcodes-appendix.html.
 var (
+	ErrNoRows = sql.ErrNoRows
 	// Class 22 - Data Exception.
 	ErrDivisionByZero            = errors.New("[code: 22012] divison by zero error")
 	ErrBadCopyFileFormat         = errors.New("[code: 22P04] bad_copy_file_format error")
