@@ -54,25 +54,27 @@ type DSN struct {
 	DatabaseName    string
 	SSLMode         string
 	ApplicationName string
+	SearchPath      string
 }
 
 func (d DSN) URL() string {
-	return buildPostgresURL(d.Username, d.Password, d.Host, d.Port, d.DatabaseName, d.SSLMode)
+	return buildPostgresURL(d.Username, d.Password, d.Host, d.Port, d.DatabaseName, d.SSLMode, d.SearchPath)
 }
 
 // SafeURL generates a safe URL(without password) but not usable for the dsn for connecting to the database.
 func (d DSN) SafeURL() string {
-	return buildPostgresURL(d.Username, "[xxxx]", d.Host, d.Port, d.DatabaseName, d.SSLMode)
+	return buildPostgresURL(d.Username, "[xxxx]", d.Host, d.Port, d.DatabaseName, d.SSLMode, d.SearchPath)
 }
 
 func (d DSN) BuildConfig() (ConnectConfig, error) {
 	config := ConnectConfig{
-		Driver:   "pgx",
-		Username: d.Username,
-		Password: d.Password,
-		Host:     d.Host,
-		Port:     d.Port,
-		SSLMode:  d.SSLMode,
+		Driver:     "pgx",
+		Username:   d.Username,
+		Password:   d.Password,
+		Host:       d.Host,
+		Port:       d.Port,
+		SSLMode:    d.SSLMode,
+		SearchPath: d.SearchPath,
 	}
 	return config, config.validate()
 }
@@ -100,6 +102,7 @@ func ParseDSN(dsn string) (DSN, error) {
 		DatabaseName:    meta["dbname"],
 		SSLMode:         meta["sslmode"],
 		ApplicationName: meta["application_name"],
+		SearchPath:      meta["search_path"],
 	}, nil
 }
 

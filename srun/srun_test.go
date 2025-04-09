@@ -316,7 +316,8 @@ level=INFO msg="[Service] testing_3: STOPPED" logger_scope=service_runner
 level=INFO msg="[Service] testing_2: SHUTTING DOWN" logger_scope=service_runner
 level=INFO msg="[Service] testing_2: STOPPED" logger_scope=service_runner
 level=INFO msg="[Service] testing_1: SHUTTING DOWN" logger_scope=service_runner
-level=INFO msg="[Service] testing_1: STOPPED" logger_scope=service_runner`
+level=INFO msg="[Service] testing_1: STOPPED" logger_scope=service_runner
+`
 
 	buff := bytes.NewBuffer(nil)
 	config := Config{
@@ -833,7 +834,7 @@ func TestSrun(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		outstr := string(out)
+		outstr := strings.TrimSpace(string(out))
 
 		if outstr != "v0.1" {
 			t.Fatalf("expecting v0.1 but got %s", outstr)

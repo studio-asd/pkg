@@ -43,9 +43,9 @@ type ConnectConfig struct {
 	ConnMaxIdletime time.Duration
 	ConnMaxLifetime time.Duration
 	// TracerConfig holds the tracer configuration along with otel tracer inside it.
-	TracerConfig TracerConfig
+	TracerConfig *TracerConfig
 	// MeterConfig holds the meter configuration along with otel meter inside it.
-	MeterConfig MeterConfig
+	MeterConfig *MeterConfig
 }
 
 func (c *ConnectConfig) validate() error {
@@ -90,8 +90,15 @@ func (c *ConnectConfig) validate() error {
 	if c.ConnMaxLifetime == 0 {
 		c.ConnMaxLifetime = defaultConnMaxLifetime
 	}
+
+	if c.TracerConfig == nil {
+		c.TracerConfig = &TracerConfig{}
+	}
 	if err := c.TracerConfig.validate(); err != nil {
 		return err
+	}
+	if c.MeterConfig == nil {
+		c.MeterConfig = &MeterConfig{}
 	}
 	if err := c.MeterConfig.validate(); err != nil {
 		return err
@@ -112,17 +119,17 @@ func (c *ConnectConfig) validate() error {
 // DSN returns the PostgreSQL DSN.
 //
 //	For example: postgres://username:password@localhost:5432/mydb?sslmode=false.
-func (c *ConnectConfig) DSN() (url string, dsn DSN, err error) {
-	url = buildPostgresURL(c.Username, c.Password, c.Host, c.Port, c.DBName, c.SSLMode)
-	if c.SearchPath != "" {
-		url = url + "&search_path=" + c.SearchPath
-	}
-	dsn, err = ParseDSN(url)
+func (c *ConnectConfig) DSN() (dsn DSN, err error) {
+	dsn, err = ParseDSN(buildPostgresURL(c.Username, c.Password, c.Host, c.Port, c.DBName, c.SSLMode, c.SearchPath))
 	return
 }
 
-func buildPostgresURL(username, password, host, port, dbName, sslMode string) string {
-	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s", username, password, host, port, dbName, sslMode)
+func buildPostgresURL(username, password, host, port, dbName, sslMode, searchPath string) string {
+	url := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s", username, password, host, port, dbName, sslMode)
+	if searchPath != "" {
+		url = url + "&search_path=" + searchPath
+	}
+	return url
 }
 
 type TracerConfig struct {

@@ -29,14 +29,6 @@ import (
 
 type Postgres struct {
 	config *ConnectConfig
-	// tracer stores the pointer to the tracer configuration as we pass the tracer configuration everywhere.
-	// We don't use pointer of the TracerConfig inside the ConnectConfig because the configuration can be copied
-	// outside of the postgres package.
-	//
-	// As this configuration will be passed to transactions, etc. Please be awware to not change the values as
-	// it will introduce a race.
-	tracer *TracerConfig
-	meter  *MeterConfig
 
 	db    *sql.DB
 	pgx   *pgxpool.Pool
@@ -106,10 +98,11 @@ func Connect(ctx context.Context, config ConnectConfig) (*Postgres, error) {
 		err   error
 	)
 
-	url, _, err := config.DSN()
+	dsn, err := config.DSN()
 	if err != nil {
 		return nil, err
 	}
+	url := dsn.URL()
 
 	switch config.Driver {
 	case "postgres":
@@ -139,8 +132,6 @@ func Connect(ctx context.Context, config ConnectConfig) (*Postgres, error) {
 		// We copy the configuration because we are copying the Postgres object in every transactions and with metrics calls. And a direct
 		// copy of the configuration struct will use quite a bit of memory.
 		config:          &config,
-		tracer:          &config.TracerConfig,
-		meter:           &config.MeterConfig,
 		db:              db,
 		pgx:             pgxdb,
 		searchPath:      config.SearchPath,
@@ -161,7 +152,7 @@ func (p *Postgres) Query(ctx context.Context, query string, params ...any) (*Row
 
 func (p *Postgres) query(ctx context.Context, query string, params ...any) (rc *RowsCompat, err error) {
 	mt := time.Now()
-	spanCtx, span := p.tracer.Tracer.Start(
+	spanCtx, span := p.config.TracerConfig.Tracer.Start(
 		ctx,
 		"postgres.query",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -213,7 +204,7 @@ func (p *Postgres) query(ctx context.Context, query string, params ...any) (rc *
 }
 
 func (p *Postgres) RunQuery(ctx context.Context, query string, f func(*RowsCompat) error, params ...any) (err error) {
-	spanCtx, span := p.tracer.Tracer.Start(
+	spanCtx, span := p.config.TracerConfig.Tracer.Start(
 		ctx,
 		"postgres.runQuery",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -252,7 +243,7 @@ func (p *Postgres) RunQuery(ctx context.Context, query string, f func(*RowsCompa
 // QueryRow retrieve at most one row for a single query.
 func (p *Postgres) QueryRow(ctx context.Context, query string, params ...any) *RowCompat {
 	mt := time.Now()
-	spanCtx, span := p.tracer.Tracer.Start(
+	spanCtx, span := p.config.TracerConfig.Tracer.Start(
 		ctx,
 		"postgres.queryRow",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -288,7 +279,7 @@ func (p *Postgres) QueryRow(ctx context.Context, query string, params ...any) *R
 func (p *Postgres) Exec(ctx context.Context, query string, params ...any) (ec *ExecResultCompat, err error) {
 	mt := time.Now()
 
-	spanCtx, span := p.tracer.Tracer.Start(
+	spanCtx, span := p.config.TracerConfig.Tracer.Start(
 		ctx,
 		"postgres.exec",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -361,7 +352,7 @@ func (p *Postgres) beginTx(ctx context.Context, iso sql.IsolationLevel) (tx *Tra
 		attribute.Bool("postgres.in_transaction", true),
 	)
 
-	spanCtx, span := p.tracer.Tracer.Start(
+	spanCtx, span := p.config.TracerConfig.Tracer.Start(
 		ctx,
 		"postgres.beginTx",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -384,7 +375,7 @@ func (p *Postgres) beginTx(ctx context.Context, iso sql.IsolationLevel) (tx *Tra
 		tx = &TransactCompat{
 			pgxTx:  pgxTx,
 			ctx:    spanCtx,
-			tracer: p.tracer,
+			tracer: p.config.TracerConfig,
 			// Load span attributes once, without the query name and also the arguments. So we don't have to load
 			// all the attributes again in each operation.
 			spanAttrs: spanAttrs,
@@ -399,7 +390,7 @@ func (p *Postgres) beginTx(ctx context.Context, iso sql.IsolationLevel) (tx *Tra
 	tx = &TransactCompat{
 		tx:     stdlibTx,
 		ctx:    spanCtx,
-		tracer: p.tracer,
+		tracer: p.config.TracerConfig,
 		// Load span attributes once, without the query name and also the arguments. So we don't have to load
 		// all the attributes again in each operation.
 		spanAttrs: spanAttrs,
@@ -413,7 +404,7 @@ func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc 
 	}
 
 	mt := time.Now()
-	spanCtx, span := p.tracer.Tracer.Start(
+	spanCtx, span := p.config.TracerConfig.Tracer.Start(
 		ctx,
 		"postgres.transact",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -469,8 +460,6 @@ func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc 
 		db:          p.db,
 		pgx:         p.pgx,
 		tx:          tx,
-		tracer:      p.tracer,
-		meter:       p.meter,
 		txIso:       iso,
 		metricsName: p.metricsName,
 	}
@@ -488,7 +477,7 @@ func (p *Postgres) transact(ctx context.Context, iso sql.IsolationLevel, txFunc 
 
 func (p *Postgres) Prepare(ctx context.Context, query string) (sc *StmtCompat, err error) {
 	mt := time.Now()
-	spanCtx, span := p.tracer.Tracer.Start(
+	spanCtx, span := p.config.TracerConfig.Tracer.Start(
 		ctx,
 		"postgres.prepare",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -525,7 +514,7 @@ func (p *Postgres) Prepare(ctx context.Context, query string) (sc *StmtCompat, e
 			sql:       query,
 			pgxdb:     p.pgx,
 			ctx:       spanCtx,
-			tracer:    p.tracer,
+			tracer:    p.config.TracerConfig,
 			spanAttrs: attrs,
 		}, nil
 	}
@@ -537,14 +526,14 @@ func (p *Postgres) Prepare(ctx context.Context, query string) (sc *StmtCompat, e
 	return &StmtCompat{
 		stmt:      stmt,
 		ctx:       spanCtx,
-		tracer:    p.tracer,
+		tracer:    p.config.TracerConfig,
 		spanAttrs: attrs,
 	}, nil
 }
 
 func (p *Postgres) Ping(ctx context.Context) (err error) {
 	mt := time.Now()
-	spanCtx, span := p.tracer.Tracer.Start(
+	spanCtx, span := p.config.TracerConfig.Tracer.Start(
 		ctx,
 		"postgres.ping",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -733,8 +722,6 @@ func (p *Postgres) WithMetrics(ctx context.Context, name string, fn func(context
 		db:          p.db,
 		pgx:         p.pgx,
 		tx:          p.tx,
-		tracer:      p.tracer,
-		meter:       p.meter,
 		txIso:       p.txIso,
 		metricsName: name,
 	}
@@ -748,7 +735,7 @@ func (p *Postgres) recordMetrics(ctx context.Context, t time.Time, attributes []
 	if p.metricsName == "" {
 		return nil
 	}
-	attrs := p.meter.metricAttributesFromContext(ctx)
+	attrs := p.config.MeterConfig.metricAttributesFromContext(ctx)
 	if len(attributes) > 0 {
 		attrs = append(attrs, attributes...)
 	}
@@ -756,7 +743,7 @@ func (p *Postgres) recordMetrics(ctx context.Context, t time.Time, attributes []
 	// as the number of metrics name.
 	attrs = append(attrs, attribute.String("execution.name", p.metricsName))
 
-	histogram, err := p.meter.Meter.Float64Histogram("postgres.query_execution")
+	histogram, err := p.config.MeterConfig.Meter.Float64Histogram("postgres.query_execution")
 	if err != nil {
 		return err
 	}

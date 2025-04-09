@@ -46,10 +46,10 @@ func TestConfigvalidate(t *testing.T) {
 			MaxOpenConns:    30,
 			ConnMaxIdletime: defaultConnMaxIdletime,
 			ConnMaxLifetime: defaultConnMaxLifetime,
-			TracerConfig: TracerConfig{
+			TracerConfig: &TracerConfig{
 				Tracer: otel.GetTracerProvider().Tracer("postgres"),
 			},
-			MeterConfig: MeterConfig{
+			MeterConfig: &MeterConfig{
 				Meter: otel.GetMeterProvider().Meter("postgres"),
 			},
 		}

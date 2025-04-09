@@ -284,10 +284,10 @@ func (scc *PostgresConnConfig) Connect(ctx context.Context) ([]*postgres.Postgre
 			MaxOpenConns:    scc.PrimaryDB.MaxOpenConns,
 			ConnMaxIdletime: time.Duration(scc.PrimaryDB.ConnMaxIdleTime),
 			ConnMaxLifetime: time.Duration(scc.PrimaryDB.ConnMaxLifetime),
-			TracerConfig: postgres.TracerConfig{
+			TracerConfig: &postgres.TracerConfig{
 				Tracer: otel.GetTracerProvider().Tracer("postgres"),
 			},
-			MeterConfig: postgres.MeterConfig{
+			MeterConfig: &postgres.MeterConfig{
 				Meter:        otel.GetMeterProvider().Meter("postgres"),
 				MonitorStats: scc.PrimaryDB.MonitorStats,
 			},
@@ -323,10 +323,10 @@ func (scc *PostgresConnConfig) Connect(ctx context.Context) ([]*postgres.Postgre
 			MaxOpenConns:    scc.SecondaryDB.MaxOpenConns,
 			ConnMaxIdletime: time.Duration(scc.SecondaryDB.ConnMaxIdleTime),
 			ConnMaxLifetime: time.Duration(scc.SecondaryDB.ConnMaxLifetime),
-			TracerConfig: postgres.TracerConfig{
+			TracerConfig: &postgres.TracerConfig{
 				Tracer: otel.GetTracerProvider().Tracer("postgres"),
 			},
-			MeterConfig: postgres.MeterConfig{
+			MeterConfig: &postgres.MeterConfig{
 				Meter:        otel.GetMeterProvider().Meter("postgres"),
 				MonitorStats: scc.SecondaryDB.MonitorStats,
 			},

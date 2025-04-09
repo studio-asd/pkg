@@ -3,7 +3,10 @@ package srun
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"os"
+	"strconv"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/runtime"
@@ -35,6 +38,41 @@ type OTelTracerConfig struct {
 type OtelTracerExporter struct {
 	GRPC *OtelTracerGRPCExporter
 	HTTP *OtelTracerHTTPExporter
+}
+
+func (o *OtelTracerExporter) Validate() error {
+	// Check the environment variable value and set the exporter based on the environment variable.
+	exporter, ok := os.LookupEnv("SRUN_OTEL_TRACE_EXPORTER")
+	if !ok {
+		return nil
+	}
+
+	var (
+		insecure bool
+		err      error
+	)
+	endpoint := os.Getenv("SRUN_OTEL_TRACE_EXPORTER_ENDPOINT")
+	endpointInsecure := os.Getenv("SRUN_OTEL_TRACE_EXPORTER_ENDPOINT_INSECURE")
+	if endpointInsecure != "" {
+		insecure, err = strconv.ParseBool(endpointInsecure)
+		if err != nil {
+			return fmt.Errorf("invalid value for SRUN_OTEL_TRACE_EXPORTER_ENDPOINT_INSECURE, need boolean value but got %s", endpointInsecure)
+		}
+	}
+
+	switch exporter {
+	case "http":
+		o.HTTP = &OtelTracerHTTPExporter{
+			Endpoint: endpoint,
+			Insecure: insecure,
+		}
+	case "grpc":
+		o.HTTP = &OtelTracerHTTPExporter{
+			Endpoint: endpoint,
+			Insecure: insecure,
+		}
+	}
+	return nil
 }
 
 type OtelTracerGRPCExporter struct {

@@ -69,6 +69,36 @@ You can look into the example [here](./example/main.go).
 
       The feature flag is automatically monitored via `otel` metrics named `srun-feature-flags` using a `guage` meter.
 
+## Environment Variables
+
+The `srun` package provides several environment variables as a knob to easily configure the program. The package will always respect the environment variable as the highest priority, so the value of the environment variable will override the default value or the value of the configuration.
+
+The reason of why we are doing this is because sometimes we want to enforce some standards to the program without changing the code too much.
+
+### Logging
+
+1. `SRUN_LOG_FORMAT`
+
+    Set the format of the log, either `json` or `text`.
+
+2. `SRUN_LOG_LEVEL`
+
+    Set the level of the log, either `debug`, `info`, `warn`, or `error`.
+
+### OpenTelemetry
+
+1. `SRUN_OTEL_TRACE_EXPORTER`
+
+    OTel has either `http` or `grpc` as the exporter.
+
+2. `SRUN_OTEL_TRACE_EXPORTER_ENDPOINT`
+
+    Set the `endpoint` of the exporter, for either `http` or `grpc`.
+
+3. `SRUN_OTEL_TRACE_EXPORTER_ENDPOINT_INSECURE`
+
+    Set the `insecure` flag of the exporter, for either `http` or `grpc`.
+
 ## Understanding Runner
 
 ### What Is Service?
@@ -174,7 +204,7 @@ stateDiagram-v2
    note right of Running
       Transition after Ready() returns nil
    end note
-   Running --> ShuttingDown 
+   Running --> ShuttingDown
    note right of ShuttingDown
       Transition before Stop() invoked
    end note

@@ -104,10 +104,11 @@ func TestGenerateURL(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			url, _, err := test.config.DSN()
+			dsn, err := test.config.DSN()
 			if err != nil {
 				t.Fatal(err)
 			}
+			url := dsn.URL()
 			if url != test.expect {
 				t.Fatalf("expecting:\n%s\nbut got\n%s", test.expect, url)
 			}

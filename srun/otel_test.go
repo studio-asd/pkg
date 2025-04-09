@@ -20,8 +20,12 @@ func TestOtelTracer(t *testing.T) {
 		err        error
 	}{
 		{
-			name:       "default configuration",
-			config:     OTelTracerConfig{},
+			name: "default configuration",
+			config: OTelTracerConfig{
+				Exporter: OtelTracerExporter{
+					HTTP: &OtelTracerHTTPExporter{},
+				},
+			},
 			tracerType: nooptrace.Tracer{},
 			nilTask:    false,
 			err:        nil,

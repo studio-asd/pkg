@@ -2,6 +2,7 @@ package srun
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -24,10 +25,11 @@ const defaultLogLevel = slog.LevelInfo
 
 // LoggerConfig configures log/slog logger and put the configuration result as the default logger to slog.
 type LoggerConfig struct {
-	Format     string // Either a 'text' or 'json'. We use 'json' by default.
-	RemoveTime bool   // Removes the time from logger.
-	AddSource  bool   // Adds source code location when logging.
-	Level      slog.Level
+	Format                  string // Either a 'text' or 'json'. We use 'json' by default.
+	RemoveTime              bool   // Removes the time from logger.
+	RemoveDefaultAttributes bool   // Remove the default log attributes.
+	AddSource               bool   // Adds source code location when logging.
+	Level                   slog.Level
 	// Output overrides and control the output of the program log. By default, all logs will be sent to os.Stderr.
 	Output io.Writer
 
@@ -41,10 +43,25 @@ func (l *LoggerConfig) Validate() error {
 	if l.Format == "" {
 		l.Format = LogFormatText
 	}
-	// If the log format from GOPKG_LOG_FORMAT is not empty, then we need to respect the env variable.
-	logFormat := os.Getenv("GOPKG_LOG_FORMAT")
+	// If the log format from SRUN_LOG_FORMAT is not empty, then we need to respect the env variable.
+	logFormat := os.Getenv("SRUN_LOG_FORMAT")
 	if logFormat != "" {
 		l.Format = logFormat
+	}
+	logLevel := os.Getenv("SRUN_LOG_LEVEL")
+	if logLevel != "" {
+		switch logLevel {
+		case "debug":
+			l.Level = slog.LevelDebug
+		case "info":
+			l.Level = slog.LevelInfo
+		case "warn":
+			l.Level = slog.LevelWarn
+		case "error":
+			l.Level = slog.LevelError
+		default:
+			return fmt.Errorf("invalid log level for SRUN_LOG_LEVEL, got %s", logLevel)
+		}
 	}
 
 	if l.Output == nil {
@@ -74,7 +91,7 @@ func setDefaultSlog(config LoggerConfig) {
 		}
 	}
 	// If testing then we should force the removal of several key attributes.
-	if testing.Testing() {
+	if testing.Testing() || config.RemoveDefaultAttributes {
 		replacerFunc = func(groups []string, attr slog.Attr) slog.Attr {
 			if len(groups) == 0 {
 				switch attr.Key {

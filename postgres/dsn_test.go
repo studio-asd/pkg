@@ -16,8 +16,9 @@ func TestPostgres(t *testing.T) {
 		Port:         "5432",
 		DatabaseName: "mydb",
 		SSLMode:      "verify-full",
+		SearchPath:   "public",
 	}
-	m, err := ParseDSN("postgres://bob:secret@1.2.3.4:5432/mydb?sslmode=verify-full")
+	m, err := ParseDSN("postgres://bob:secret@1.2.3.4:5432/mydb?sslmode=verify-full&search_path=public")
 	if err != nil {
 		t.Fatal(err)
 	}

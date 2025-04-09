@@ -23,9 +23,10 @@ func main() {
 			SelfUpgrade: true,
 		},
 		Logger: srun.LoggerConfig{
-			Format:     "text",
-			Level:      slog.LevelInfo,
-			RemoveTime: true,
+			Format:                  "text",
+			Level:                   slog.LevelInfo,
+			RemoveTime:              true,
+			RemoveDefaultAttributes: true,
 		},
 	})
 	r.SetTestConfigFunc(func(ctx srun.Context) error {
