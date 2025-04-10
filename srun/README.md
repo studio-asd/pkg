@@ -75,6 +75,20 @@ The `srun` package provides several environment variables as a knob to easily co
 
 The reason of why we are doing this is because sometimes we want to enforce some standards to the program without changing the code too much.
 
+### Timeout
+
+1. `SRUN_READY_TIMEOUT`
+
+    The `SRUN_READY_TIMEOUT` is the timeout that being set to wait for a service to become `ready`.
+
+2. `SRUN_DEADLINE_TIMEOUT`
+
+    The `SRUN_DEADLINE_TIMEOUT` is the timeout that being set for the program before it dies.
+
+3. `SRUN_GRACEFUL_TIMEOUT`
+
+    The `SRUN_GRACEFUL_TIMEOUT` is the timeout that being set to wait for the program to gracefully stop.
+
 ### Logging
 
 1. `SRUN_LOG_FORMAT`
@@ -85,7 +99,7 @@ The reason of why we are doing this is because sometimes we want to enforce some
 
     Set the level of the log, either `debug`, `info`, `warn`, or `error`.
 
-### OpenTelemetry
+### OpenTelemetry Trace
 
 1. `SRUN_OTEL_TRACE_EXPORTER`
 
@@ -96,6 +110,20 @@ The reason of why we are doing this is because sometimes we want to enforce some
     Set the `endpoint` of the exporter, for either `http` or `grpc`.
 
 3. `SRUN_OTEL_TRACE_EXPORTER_ENDPOINT_INSECURE`
+
+    Set the `insecure` flag of the exporter, for either `http` or `grpc`.
+
+### OpenTelemetry Metrics
+
+1. `SRUN_OTEL_METRIC_EXPORTER`
+
+    OTel has either `http` or `grpc` as the exporter.
+
+2. `SRUN_OTEL_METRIC_EXPORTER_ENDPOINT`
+
+    Set the `endpoint` of the exporter, for either `http` or `grpc`.
+
+3. `SRUN_OTEL_METRIC_EXPORTER_ENDPOINT_INSECURE`
 
     Set the `insecure` flag of the exporter, for either `http` or `grpc`.
 

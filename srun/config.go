@@ -54,14 +54,20 @@ func (c *Config) Validate() error {
 		return err
 	}
 	goVersion := runtime.Version()
+
 	// Inject additonal information to the logger for the log fields.
 	c.Logger.appName = c.Name
 	c.Logger.appVersion = c.Version
 	c.Logger.goVersion = goVersion
+
+	if err := c.OtelTracer.Validate(); err != nil {
+		return err
+	}
 	// Inject information to the otel trace configuration
 	c.OtelTracer.appName = c.Name
 	c.OtelTracer.appVersion = c.Version
 	c.OtelTracer.goVersion = goVersion
+
 	// Inject information to the otel metric configuration
 	c.OtelMetric.appName = c.Name
 	c.OtelMetric.appVersion = c.Version

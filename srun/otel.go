@@ -12,6 +12,8 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/runtime"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/prometheus"
@@ -78,7 +80,7 @@ func (o *OtelTracerExporter) Validate() error {
 			Insecure: insecure,
 		}
 	case "grpc":
-		o.HTTP = &OtelTracerHTTPExporter{
+		o.GRPC = &OtelTracerGRPCExporter{
 			Endpoint: endpoint,
 			Insecure: insecure,
 		}
@@ -200,11 +202,63 @@ type OtelMetricConfig struct {
 	Disable bool
 	// MeterName is the name of metric meter for otel meter provider.
 	MeterName string
+	Exporter  OtelMetricExporter
 	// Below is a private configuration passed from the srun itself to provide several information
 	// for the open-telemetry.
 	appName    string
 	appVersion string
 	goVersion  string
+}
+
+type OtelMetricExporter struct {
+	Prometheus *OtelMetricPrometheusExporter
+	HTTP       *OtelMetricHTTPExporter
+	GRPC       *OtelMetricGRPCExporter
+}
+
+func (o *OtelMetricExporter) Validate() error {
+	var (
+		insecure bool
+		err      error
+	)
+
+	exporter := os.Getenv("SRUN_OTEL_METRIC_EXPORTER")
+	endpoint := os.Getenv("SRUN_OTEL_METRIC_EXPORTER_ENDPOINT")
+	endpointInsecure := os.Getenv("SRUN_OTEL_METRIC_EXPORTER_ENDPOINT_INSECURE")
+	if endpointInsecure != "" {
+		insecure, err = strconv.ParseBool(endpointInsecure)
+		if err != nil {
+			return fmt.Errorf("invalid value for SRUN_OTEL_METRIC_EXPORTER_ENDPOINT_INSECURE, need boolean value but got %s", endpointInsecure)
+		}
+	}
+
+	switch exporter {
+	case "prometheus":
+		o.Prometheus = &OtelMetricPrometheusExporter{}
+	case "http":
+		o.HTTP = &OtelMetricHTTPExporter{
+			Endpoint: endpoint,
+			Insecure: insecure,
+		}
+	case "grpc":
+		o.GRPC = &OtelMetricGRPCExporter{
+			Endpoint: endpoint,
+			Insecure: insecure,
+		}
+	}
+	return nil
+}
+
+type OtelMetricPrometheusExporter struct{}
+
+type OtelMetricHTTPExporter struct {
+	Endpoint string
+	Insecure bool
+}
+
+type OtelMetricGRPCExporter struct {
+	Endpoint string
+	Insecure bool
 }
 
 // newOtelMetricsMeterAndProviderService returns open telemetry meter and provider so we can use them inside the runner and inject it to the Context.
@@ -227,12 +281,48 @@ func newOtelMetricMeterAndProviderService(config OtelMetricConfig) (metric.Meter
 		return nil, nil, err
 	}
 
-	promExporter, err := prometheus.New()
-	if err != nil {
-		return nil, nil, err
+	var exporter metricsdk.Reader
+	if config.Exporter.Prometheus != nil {
+		exporter, err = prometheus.New()
+		if err != nil {
+			return nil, nil, err
+		}
 	}
+	if config.Exporter.HTTP != nil {
+		options := []otlpmetrichttp.Option{
+			otlpmetrichttp.WithEndpoint(config.Exporter.HTTP.Endpoint),
+		}
+		if config.Exporter.HTTP.Insecure {
+			options = append(options, otlpmetrichttp.WithInsecure())
+		}
+		httpExporter, err := otlpmetrichttp.New(
+			context.Background(),
+			options...,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		exporter = metricsdk.NewPeriodicReader(httpExporter)
+	}
+	if config.Exporter.GRPC != nil {
+		options := []otlpmetricgrpc.Option{
+			otlpmetricgrpc.WithEndpoint(config.Exporter.GRPC.Endpoint),
+		}
+		if config.Exporter.GRPC.Insecure {
+			options = append(options, otlpmetricgrpc.WithInsecure())
+		}
+		grpcExporter, err := otlpmetricgrpc.New(
+			context.Background(),
+			options...,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		exporter = metricsdk.NewPeriodicReader(grpcExporter)
+	}
+
 	provider := metricsdk.NewMeterProvider(
-		metricsdk.WithReader(promExporter),
+		metricsdk.WithReader(exporter),
 		metricsdk.WithResource(res),
 	)
 	// Set the meter provider so it can be used elsewhere in the program.
