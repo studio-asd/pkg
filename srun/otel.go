@@ -35,6 +35,17 @@ type OTelTracerConfig struct {
 	goVersion  string
 }
 
+func (o *OTelTracerConfig) Validate() error {
+	// If the tracing is disabled, then we should return early and don't bother with anything else.
+	if o.Disable {
+		return nil
+	}
+	if err := o.Exporter.Validate(); err != nil {
+		return err
+	}
+	return nil
+}
+
 type OtelTracerExporter struct {
 	GRPC *OtelTracerGRPCExporter
 	HTTP *OtelTracerHTTPExporter

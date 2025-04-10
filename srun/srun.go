@@ -485,9 +485,6 @@ func (r *Runner) registerDefaultServices(otelTracerProvider, otelMeterProvider *
 // 5. Stop ALL services.
 func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) (returnedErr error) {
 	r.logger.Info(fmt.Sprintf("Running program: %s", r.serviceName))
-	var (
-		gracefulShutdownTimeout = r.config.Timeout.ShutdownGracefulPeriod
-	)
 	// If the program is running with --test-config then we should not attempted to run the whole program. In this case, just trigger
 	// the test config function then exit.
 	if r.flags.TestConfig() {
@@ -591,6 +588,13 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 		return nil
 	}
 
+	// Before init-ing and running the services, we need to be sure that all services are stopped.
+	defer func() {
+		err := r.stopServices()
+		if err != nil {
+			returnedErr = errors.Join(returnedErr, err)
+		}
+	}()
 	// Init all services first as we want to ensure that services can be initialized before it runs. The order
 	// of initialization follows the FIFO order to ensure we respect the orders of registered services.
 	err := r.initServices(ctxSignal)
@@ -652,28 +656,33 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 	}
 	// Put the exitCause as the returnedErr as any other error shoud be appended to the returnedErr.
 	returnedErr = exitCause
-	// Don't forget to stop all the services to ensure we are not leaking any resources behind.
-	// We put the defer on-top for of triggering the run becauase we want to ensure if something
-	// bad happen in the run function, we will still stop all the services.
-	//
-	// We need to stop all the services in LIFO order to ensure we prevent incoming traffic in
-	// case of a service registering a http/gRPC server at the bottom of the service stack.
-	// This actually match with what defer did. Defered functions will be executed from bottom.
-	//
-	// Imagine the services stack looked like this, the same with the one started above:
-	//	|-------------------|
-	//	|resource-controller|
-	//	|    http-server   	|
-	//	|    grpc-server	| <- exit_first
-	//	|-------------------|
-	//
-	// Then the grpc-server will stopped first, then http-server. And after all traffic is stopped then
-	// the resource-controller will be stopped after ensuring all connections are dropped/finished.
-	//
-	// We stopped the services inside a goroutine to ensure there are no blockers in the shutdown process
-	// and we will wait until the graceful period timeout.
+	return
+}
+
+// Don't forget to stop all the services to ensure we are not leaking any resources behind.
+// We put the defer on-top for of triggering the run becauase we want to ensure if something
+// bad happen in the run function, we will still stop all the services.
+//
+// We need to stop all the services in LIFO order to ensure we prevent incoming traffic in
+// case of a service registering a http/gRPC server at the bottom of the service stack.
+// This actually match with what defer did. Defered functions will be executed from bottom.
+//
+// Imagine the services stack looked like this, the same with the one started above:
+//
+//	|-------------------|
+//	|resource-controller|
+//	|    http-server   	|
+//	|    grpc-server	| <- exit_first
+//	|-------------------|
+//
+// Then the grpc-server will stopped first, then http-server. And after all traffic is stopped then
+// the resource-controller will be stopped after ensuring all connections are dropped/finished.
+//
+// We stopped the services inside a goroutine to ensure there are no blockers in the shutdown process
+// and we will wait until the graceful period timeout.
+func (r *Runner) stopServices() error {
 	stopErrC := make(chan error)
-	ctxTimeout, cancel := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
+	ctxTimeout, cancel := context.WithTimeout(context.Background(), r.config.Timeout.ShutdownGracefulPeriod)
 	defer cancel()
 	// Invoke a goroutine and stop the services sequentially because we don't want to kill the services randomly.
 	go func() {
@@ -689,13 +698,9 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 
 	select {
 	case <-ctxTimeout.Done():
-		returnedErr = errors.Join(returnedErr, errGracefulPeriodTimeout)
-		return
+		return errGracefulPeriodTimeout
 	case err := <-stopErrC:
-		if err != nil {
-			returnedErr = errors.Join(returnedErr, err)
-		}
-		return
+		return err
 	}
 }
 

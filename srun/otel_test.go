@@ -127,3 +127,134 @@ func TestOtelMeter(t *testing.T) {
 		})
 	}
 }
+
+func TestOtelTracerConfigValidate(t *testing.T) {
+	tests := []struct {
+		name       string
+		setenvFunc func(t *testing.T)
+		config     OTelTracerConfig
+		expect     OTelTracerConfig
+		expectErr  bool
+	}{
+		{
+			name: "disable, nil exporter",
+			config: OTelTracerConfig{
+				Disable: true,
+			},
+			expect: OTelTracerConfig{
+				Disable: true,
+			},
+			expectErr: false,
+		},
+		{
+			name: "disable, non-nil exporter",
+			config: OTelTracerConfig{
+				Disable: true,
+				Exporter: OtelTracerExporter{
+					GRPC: &OtelTracerGRPCExporter{},
+					HTTP: &OtelTracerHTTPExporter{},
+				},
+			},
+			expect: OTelTracerConfig{
+				Disable: true,
+			},
+			expectErr: false,
+		},
+		{
+			name: "enable, empty exporter",
+			config: OTelTracerConfig{
+				Disable: false,
+			},
+			expect: OTelTracerConfig{
+				Disable: false,
+			},
+			expectErr: false,
+		},
+		{
+			name: "enable, empty exporter",
+			config: OTelTracerConfig{
+				Disable: false,
+			},
+			expect: OTelTracerConfig{
+				Disable: false,
+			},
+			expectErr: false,
+		},
+		{
+			name: "enable, non-nil exporter",
+			config: OTelTracerConfig{
+				Disable: false,
+				Exporter: OtelTracerExporter{
+					GRPC: &OtelTracerGRPCExporter{
+						Endpoint: "abc",
+						Insecure: true,
+					},
+				},
+			},
+			expect: OTelTracerConfig{
+				Disable: false,
+				Exporter: OtelTracerExporter{
+					GRPC: &OtelTracerGRPCExporter{
+						Endpoint: "abc",
+						Insecure: true,
+					},
+				},
+			},
+			expectErr: false,
+		},
+		{
+			name: "enable, nil exporter with env-var grpc",
+			setenvFunc: func(t *testing.T) {
+				t.Setenv("SRUN_OTEL_TRACE_EXPORTER", "grpc")
+				t.Setenv("SRUN_OTEL_TRACE_EXPORTER_ENDPOINT", "abc")
+				t.Setenv("SRUN_OTEL_TRACE_EXPORTER_ENDPOINT_INSECURE", "true")
+			},
+			config: OTelTracerConfig{
+				Disable: false,
+			},
+			expect: OTelTracerConfig{
+				Disable: false,
+				Exporter: OtelTracerExporter{
+					GRPC: &OtelTracerGRPCExporter{
+						Endpoint: "abc",
+						Insecure: true,
+					},
+				},
+			},
+			expectErr: false,
+		},
+		{
+			name: "enable, nil exporter with env-var http",
+			setenvFunc: func(t *testing.T) {
+				t.Setenv("SRUN_OTEL_TRACE_EXPORTER", "grpc")
+				t.Setenv("SRUN_OTEL_TRACE_EXPORTER_ENDPOINT", "abc")
+				t.Setenv("SRUN_OTEL_TRACE_EXPORTER_ENDPOINT_INSECURE", "true")
+			},
+			config: OTelTracerConfig{
+				Disable: false,
+			},
+			expect: OTelTracerConfig{
+				Disable: false,
+				Exporter: OtelTracerExporter{
+					HTTP: &OtelTracerHTTPExporter{
+						Endpoint: "abc",
+						Insecure: true,
+					},
+				},
+			},
+			expectErr: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.setenvFunc != nil {
+				test.setenvFunc(t)
+			}
+			err := test.config.Validate()
+			if (err != nil) != test.expectErr {
+				t.Fatalf("expecting error %v but got %v", test.expectErr, err)
+			}
+		})
+	}
+}
