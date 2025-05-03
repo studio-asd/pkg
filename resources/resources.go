@@ -3,6 +3,7 @@ package resources
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"go.opentelemetry.io/otel/metric"
@@ -62,10 +63,16 @@ func New(ctx context.Context, config Config) (*Resources, error) {
 		return nil, err
 	}
 	r := &Resources{
-		logger:    slog.Default(),
-		config:    config,
-		stopC:     make(chan struct{}, 1),
-		container: &ResourcesContainer{},
+		logger: slog.Default(),
+		config: config,
+		stopC:  make(chan struct{}, 1),
+		container: &ResourcesContainer{
+			resources: make(map[string]map[string]any),
+		},
+	}
+	// Set the logger to all packages.
+	for _, pkg := range pkgs {
+		pkg.SetLogger(r.logger)
 	}
 	if err := r.new(ctx); err != nil {
 		return nil, err
@@ -95,6 +102,8 @@ func (r *Resources) Init(ctx srun.Context) error {
 	if r.stateHelper.IsInitiated() {
 		return nil
 	}
+	// It's okay to set the initiated here as if error happens the function will return and everything
+	// will exit if srun is used.
 	r.stateHelper.SetInitiated()
 
 	// Inject the logger for all the resources.
@@ -167,9 +176,10 @@ func (r *Resources) Stop(ctx context.Context) error {
 
 	// Below services need to be stopped last.
 	// Stops all databases connections at the end of the stop process, as we want to ensure all connections are drained.
-	if r.container.postrgres != nil {
+	pgPkg, ok := pkgs[postgresPackage]
+	if ok {
 		r.logger.Info("[resources][postgresql] closing all PostgreSQL connections")
-		if err := r.container.postrgres.close(); err != nil {
+		if err := pgPkg.Close(ctx); err != nil {
 			errs = errors.Join(errs, err)
 		}
 	}
@@ -184,11 +194,16 @@ func (r *Resources) new(ctx context.Context) error {
 			"[resources] Found postgres configuration, establishing connection to PostgreSQL databases...",
 			slog.Int("postgres_config_count", len(r.config.Postgres.PostgresConnections)),
 		)
-		pgResources, err := r.config.Postgres.connect(ctx)
+		pkg, ok := pkgs[postgresPackage]
+		if !ok {
+			return fmt.Errorf("postgres package not found")
+		}
+		pgPkg := pkg.(PostgresPackage)
+		postgresResources, err := pgPkg.Connect(ctx, r.config.Postgres)
 		if err != nil {
 			return err
 		}
-		r.container.postrgres = pgResources
+		r.container.setResources(postgresPackage, postgresResources)
 	}
 	// GRPC.
 	if r.config.GRPC != nil {

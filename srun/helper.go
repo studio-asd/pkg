@@ -136,7 +136,7 @@ func (c *ConcurrentServices) Ready(ctx context.Context) error {
 		var err error
 		// Retry the readiness check until max retry attempt as we will run all the services inside goroutines. The goroutines
 		// might not even scheduled yet when this function is called, so we need to check them with retries.
-		for i := 0; i < maxRetry; i++ {
+		for _ = range maxRetry {
 			err = svc.Ready(ctx)
 			if err != nil && errors.Is(err, errCantCheckReadiness) {
 				time.Sleep(retryDelay)

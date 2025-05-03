@@ -68,6 +68,9 @@ func (c *Config) Validate() error {
 	c.OtelTracer.appVersion = c.Version
 	c.OtelTracer.goVersion = goVersion
 
+	if err := c.OtelMetric.Validate(); err != nil {
+		return err
+	}
 	// Inject information to the otel metric configuration
 	c.OtelMetric.appName = c.Name
 	c.OtelMetric.appVersion = c.Version

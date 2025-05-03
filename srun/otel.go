@@ -210,6 +210,13 @@ type OtelMetricConfig struct {
 	goVersion  string
 }
 
+func (o *OtelMetricConfig) Validate() error {
+	if err := o.Exporter.Validate(); err != nil {
+		return err
+	}
+	return nil
+}
+
 type OtelMetricExporter struct {
 	Prometheus *OtelMetricPrometheusExporter
 	HTTP       *OtelMetricHTTPExporter
@@ -245,6 +252,9 @@ func (o *OtelMetricExporter) Validate() error {
 			Endpoint: endpoint,
 			Insecure: insecure,
 		}
+	// By default, use prometheus as the exporter.
+	default:
+		o.Prometheus = &OtelMetricPrometheusExporter{}
 	}
 	return nil
 }

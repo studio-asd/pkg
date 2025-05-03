@@ -9,8 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/studio-asd/pkg/postgres"
 	"go.opentelemetry.io/otel"
+
+	"github.com/studio-asd/pkg/postgres"
 )
 
 var (
@@ -59,14 +60,14 @@ type PostgresResources struct {
 	db map[string]PostgresResource
 }
 
-// newPostgresResources creates new postgres resources object.
-func newpostgresResources() *PostgresResources {
+// NewPostgresResources creates new postgres resources object.
+func NewpostgresResources() *PostgresResources {
 	return &PostgresResources{
 		db: make(map[string]PostgresResource),
 	}
 }
 
-func (sr *PostgresResources) setPostgres(name string, dbs []*postgres.Postgres) {
+func (sr *PostgresResources) SetPostgres(name string, dbs []*postgres.Postgres) {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 	sr.db[name] = dbs
@@ -187,7 +188,7 @@ func (sc *PostgresResourcesConfig) Validate() error {
 }
 
 func (sc *PostgresResourcesConfig) connect(ctx context.Context) (*PostgresResources, error) {
-	resources := newpostgresResources()
+	resources := NewpostgresResources()
 	for _, conn := range sc.PostgresConnections {
 		primaryDSN, err := postgres.ParseDSN(conn.PrimaryDB.DSN)
 		if err != nil {
@@ -215,7 +216,7 @@ func (sc *PostgresResourcesConfig) connect(ctx context.Context) (*PostgresResour
 			)
 			return nil, err
 		}
-		resources.setPostgres(conn.Name, conns)
+		resources.SetPostgres(conn.Name, conns)
 	}
 	return resources, nil
 }
