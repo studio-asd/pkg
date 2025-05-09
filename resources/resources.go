@@ -199,7 +199,7 @@ func (r *Resources) new(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		r.container.setResources(postgresPackage, postgresResources)
+		r.container.setResources(postgresResources)
 	}
 	// GRPC.
 	if r.config.GRPC != nil {
@@ -218,7 +218,7 @@ func (r *Resources) new(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			r.container.setResources(grpcClientPackage, res)
+			r.container.setResources(res)
 		}
 		// GRPC Servers.
 		if len(r.config.GRPC.ServerResources) > 0 {
@@ -235,7 +235,7 @@ func (r *Resources) new(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			r.container.setResources(grpcServerPackage, grpcServerResources)
+			r.container.setResources(grpcServerResources)
 		}
 	}
 	return nil

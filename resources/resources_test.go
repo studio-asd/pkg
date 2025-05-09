@@ -9,6 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/studio-asd/pkg/resources"
+	grpcserver "github.com/studio-asd/pkg/resources/grpc/server"
 	"github.com/studio-asd/pkg/resources/postgres"
 	"github.com/studio-asd/pkg/srun"
 )
@@ -48,7 +49,11 @@ func TestResources(t *testing.T) {
 		break
 	}
 
-	_, err = resources.Get[postgres.PostgresDB](r.Container(), "postgres.go_example")
+	_, err = resources.Get[postgres.PostgresDB](r.Container(), "go_example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = resources.Get[*grpcserver.GRPCServer](r.Container(), "test_resources")
 	if err != nil {
 		t.Fatal(err)
 	}
