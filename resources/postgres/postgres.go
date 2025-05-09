@@ -10,6 +10,7 @@ import (
 
 	"github.com/studio-asd/pkg/postgres"
 	"github.com/studio-asd/pkg/resources"
+	"github.com/studio-asd/pkg/srun"
 )
 
 var _ resources.PostgresPackage = (*PostgresLib)(nil)
@@ -40,21 +41,36 @@ func (pr PostgresDB) Secondary() *postgres.Postgres {
 	return pr[0]
 }
 
+// Close closes both primary and secondary postgresql connections.
+func (pr PostgresDB) Close(ctx context.Context) error {
+	var errs error
+	for _, p := range pr {
+		err := p.Close()
+		if err != nil {
+			errs = errors.Join(errs, err)
+		}
+	}
+	return errs
+}
+
 func init() {
-	lib := &PostgresLib{}
+	lib := &PostgresLib{
+		conns: make(map[string]PostgresDB),
+	}
 	resources.RegisterPackage(lib)
 }
 
 type PostgresLib struct {
 	logger *slog.Logger
-}
-
-func (lib *PostgresLib) Name() string {
-	return "postgres"
+	conns  map[string]PostgresDB
 }
 
 func (lib *PostgresLib) SetLogger(logger *slog.Logger) {
 	lib.logger = logger
+}
+
+func (lib *PostgresLib) Init(ctx srun.Context) error {
+	return nil
 }
 
 func (lib *PostgresLib) Connect(ctx context.Context, config *resources.PostgresResourcesConfig) (map[string]any, error) {
@@ -84,6 +100,7 @@ func (lib *PostgresLib) Connect(ctx context.Context, config *resources.PostgresR
 
 		primaryConn, err := connect(ctx, connConfig.PrimaryDB)
 		if err != nil {
+			attrs = append(attrs, slog.String("error", err.Error()))
 			lib.logger.LogAttrs(
 				ctx,
 				slog.LevelError,
@@ -113,6 +130,7 @@ func (lib *PostgresLib) Connect(ctx context.Context, config *resources.PostgresR
 			)
 			secondaryConn, err := connect(ctx, connConfig.SecondaryDB)
 			if err != nil {
+				attrs = append(attrs, slog.String("error", err.Error()))
 				lib.logger.LogAttrs(
 					ctx,
 					slog.LevelError,
@@ -125,13 +143,36 @@ func (lib *PostgresLib) Connect(ctx context.Context, config *resources.PostgresR
 			conns = append(conns, secondaryConn)
 		}
 		// Save both connections as PostgresDB so we can use them as primary and secondary database.
-		pg[connConfig.Name] = PostgresDB(conns)
+		pgConns := PostgresDB(conns)
+		pg[connConfig.Name] = pgConns
+		// Register the connections into the library itself because we need to close all connections later on.
+		lib.conns[connConfig.Name] = pgConns
 	}
 	return pg, nil
 }
 
 func (lib *PostgresLib) Close(ctx context.Context) error {
-	return nil
+	var errs error
+	for name, conn := range lib.conns {
+		lib.logger.LogAttrs(
+			ctx,
+			slog.LevelInfo,
+			"[resources][postgres] closing connections to PostgreSQL database",
+			slog.String("db.name", name),
+		)
+		err := conn.Close(ctx)
+		if err != nil {
+			lib.logger.LogAttrs(
+				ctx,
+				slog.LevelError,
+				"[resources][postgres] failed to close connections to PostgreSQL database",
+				slog.String("db.name", name),
+				slog.String("error", err.Error()),
+			)
+			errs = errors.Join(errs, err)
+		}
+	}
+	return errs
 }
 
 func connect(ctx context.Context, config resources.PostgresConfig) (*postgres.Postgres, error) {

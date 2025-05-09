@@ -79,7 +79,7 @@ func (s *Server) Name() string {
 
 func (s *Server) Init(ctx srun.Context) error {
 	s.stateHelper = ctx.NewStateHelper("http-server")
-	s.logger = ctx.Logger
+	s.logger = ctx.Logger.With(slog.String("logger.scope", "http-server"))
 	return nil
 }
 

@@ -15,9 +15,6 @@ type ResourcesContainer struct {
 	// we can retrieve the postgres resources by using "postgres.[resource_name]". We will automatically
 	// split the "." to separate the pacakge and resource name.
 	resources map[string]map[string]any
-	// GRPC client connections.
-	grpc *grpcResources
-	// Redis connections.
 }
 
 func (r *ResourcesContainer) setResources(pkgName string, res map[string]any) {
@@ -37,10 +34,6 @@ func (r *ResourcesContainer) getResources(pkgName string) (map[string]any, error
 		return nil, fmt.Errorf("package name %s not found", pkgName)
 	}
 	return res, nil
-}
-
-func (r *ResourcesContainer) GRPC() *grpcResources {
-	return r.grpc
 }
 
 func Get[T any](container *ResourcesContainer, name string) (T, error) {

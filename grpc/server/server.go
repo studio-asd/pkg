@@ -55,7 +55,7 @@ func (s *Server) Init(ctx srun.Context) error {
 		return err
 	}
 	s.listener = listener
-	s.logger = ctx.Logger
+	s.logger = ctx.Logger.With(slog.String("logger.scope", "grpc-server"))
 
 	otelServerOption := opentelemetry.ServerOption(opentelemetry.Options{
 		MetricsOptions: opentelemetry.MetricsOptions{

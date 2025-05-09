@@ -128,17 +128,12 @@ func (r *Resources) Run(ctx context.Context) error {
 	errC := make(chan error, 1)
 	errG := errgroup.Group{}
 
-	if r.container.grpc != nil {
-		if !r.container.grpc.Server.isEmpty() {
-			errG.Go(func() error {
-				return r.container.grpc.Server.run(ctx)
-			})
-		}
-		if !r.container.grpc.Gateway.isEmpty() {
-			errG.Go(func() error {
-				return r.container.grpc.Gateway.run(ctx)
-			})
-		}
+	grpcServerPkg, ok := pkgs[grpcServerPackage]
+	if ok {
+		pkg := grpcServerPkg.(GRPCServerPackage)
+		errG.Go(func() error {
+			return pkg.Run(ctx)
+		})
 	}
 	r.stateHelper.SetRunning()
 
@@ -168,12 +163,13 @@ func (r *Resources) Stop(ctx context.Context) error {
 	}
 
 	var errs error
-	if r.container.grpc != nil {
-		if err := r.container.grpc.stop(ctx); err != nil {
+	grpcServerPkg, ok := pkgs[grpcServerPackage]
+	if ok {
+		r.logger.Info("[resources][postgresql] closing all GRPC Server connections")
+		if err := grpcServerPkg.Close(ctx); err != nil {
 			errs = errors.Join(errs, err)
 		}
 	}
-
 	// Below services need to be stopped last.
 	// Stops all databases connections at the end of the stop process, as we want to ensure all connections are drained.
 	pgPkg, ok := pkgs[postgresPackage]
@@ -196,7 +192,7 @@ func (r *Resources) new(ctx context.Context) error {
 		)
 		pkg, ok := pkgs[postgresPackage]
 		if !ok {
-			return fmt.Errorf("postgres package not found")
+			return fmt.Errorf("%s package not found", postgresPackage)
 		}
 		pgPkg := pkg.(PostgresPackage)
 		postgresResources, err := pgPkg.Connect(ctx, r.config.Postgres)
@@ -207,17 +203,22 @@ func (r *Resources) new(ctx context.Context) error {
 	}
 	// GRPC.
 	if r.config.GRPC != nil {
-		grpcResources := newGRPCResources(r.logger)
 		// GRPC Clients.
 		if len(r.config.GRPC.ClientResources) > 0 {
 			r.logger.Info(
 				"[resources] Found grpc clients configuration, establishing connection to gRPC endpoints...",
 				slog.Int("grpc_clients_config_count", len(r.config.GRPC.ClientResources)),
 			)
-			err := r.config.GRPC.connectGRPCClients(ctx, grpcResources)
+			pkg, ok := pkgs[grpcClientPackage]
+			if !ok {
+				return fmt.Errorf("%s package not found", grpcClientPackage)
+			}
+			grpcClientPkg := pkg.(GRPCClientPackage)
+			res, err := grpcClientPkg.Connect(ctx, r.config.GRPC.ClientResources)
 			if err != nil {
 				return err
 			}
+			r.container.setResources(grpcClientPackage, res)
 		}
 		// GRPC Servers.
 		if len(r.config.GRPC.ServerResources) > 0 {
@@ -225,18 +226,17 @@ func (r *Resources) new(ctx context.Context) error {
 				"[resources] Found grpc servers configuration, creating gRPC servers...",
 				slog.Int("grpc_servers_config", len(r.config.GRPC.ServerResources)),
 			)
-			// The GRPC gateway need to be created first, because when we are creating the grpc servers we will check whether the grpc gateway
-			// for the server is exists. If it exists, then we will attatch the grpc gateway server to the grpc server object.
-			err := r.config.GRPC.createGRPCGateway(ctx, grpcResources)
+			pkg, ok := pkgs[grpcServerPackage]
+			if !ok {
+				return fmt.Errorf("%s package not found", grpcServerPackage)
+			}
+			grpcServerPkg := pkg.(GRPCServerPackage)
+			grpcServerResources, err := grpcServerPkg.Create(ctx, r.config.GRPC.ServerResources)
 			if err != nil {
 				return err
 			}
-			err = r.config.GRPC.createGRPCServers(ctx, grpcResources)
-			if err != nil {
-				return err
-			}
+			r.container.setResources(grpcServerPackage, grpcServerResources)
 		}
-		r.container.grpc = grpcResources
 	}
 	return nil
 }
@@ -245,8 +245,9 @@ func (r *Resources) new(ctx context.Context) error {
 // some of the resources might be needed in the time of initialization. For example, both HTTP and gRPC servers need handler
 // to works. Other thing is, databases and other objects that needed in Init phase are also need to be initiateed.
 func (r *Resources) init(ctx srun.Context) error {
-	if r.container.grpc != nil {
-		if err := r.container.grpc.init(ctx); err != nil {
+	pkg, ok := pkgs[grpcServerPackage]
+	if ok {
+		if err := pkg.Init(ctx); err != nil {
 			return err
 		}
 	}
