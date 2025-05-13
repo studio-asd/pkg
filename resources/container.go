@@ -70,3 +70,11 @@ func Get[T any](container *ResourcesContainer, name string) (T, error) {
 	}
 	return v, nil
 }
+
+func MustGet[T any](container *ResourcesContainer, name string) T {
+	v, err := Get[T](container, name)
+	if err != nil {
+		panic(err)
+	}
+	return v
+}

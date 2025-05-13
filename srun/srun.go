@@ -323,7 +323,6 @@ func New(config Config) *Runner {
 	if err := conf.Validate(); err != nil {
 		panic(err)
 	}
-
 	setDefaultSlog(conf.Logger)
 
 	f := newFlags()
@@ -446,7 +445,7 @@ func (r *Runner) registerDefaultServices(otelTracerProvider, otelMeterProvider *
 	//	3. We can listen/watch to the service shutdown.
 	if !r.config.Admin.Disable {
 		var adminServer *adminHTTPServer
-		adminServer, err = newAdminServer(r.config.Admin.AdminServerConfig)
+		adminServer, err = newAdminServer(r.ctx, r.config.Admin.AdminServerConfig)
 		if err != nil {
 			return err
 		}

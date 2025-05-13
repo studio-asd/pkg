@@ -2,7 +2,6 @@ package resources_test
 
 import (
 	"log/slog"
-	"os"
 	"testing"
 	"time"
 
@@ -15,13 +14,29 @@ import (
 )
 
 func TestResources(t *testing.T) {
-	out, err := os.ReadFile("./testdata/testconfig.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
+	yamlConfig := `
+grpc:
+  servers:
+    - name: "test_resources"
+      address: ":20010"
+      read_timeout: "30s"
+      write_timeout: "30s"
+      grpc_gateway:
+        address: ":8090"
+
+postgres:
+  monitor_stats: true
+  max_retry: 3
+  retry_delay: "1s"
+  connects:
+    - name: "go_example"
+      driver: "pgx"
+      primary:
+        dsn: "postgres://postgres:postgres@127.0.0.1:5432/?sslmode=disable"
+`
 
 	config := resources.Config{}
-	if err := yaml.Unmarshal(out, &config); err != nil {
+	if err := yaml.Unmarshal([]byte(yamlConfig), &config); err != nil {
 		t.Fatal(err)
 	}
 

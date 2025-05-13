@@ -60,20 +60,24 @@ func (c *AdminServerConfig) validate() error {
 }
 
 type adminHTTPServer struct {
-	listener net.Listener
-	server   *http.Server
-	config   AdminServerConfig
-	readyC   chan struct{}
+	// runnerContext is the runner's parent context that listens to signal interrupt, etc. The context should be
+	// used to determine whether currently the service in a healthy condition to receive traffic.
+	runnerContext context.Context
+	listener      net.Listener
+	server        *http.Server
+	config        AdminServerConfig
+	readyC        chan struct{}
 }
 
-func newAdminServer(config AdminServerConfig) (*adminHTTPServer, error) {
+func newAdminServer(ctx context.Context, config AdminServerConfig) (*adminHTTPServer, error) {
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
 	return &adminHTTPServer{
-		server: &http.Server{},
-		config: config,
-		readyC: make(chan struct{}, 1),
+		runnerContext: ctx,
+		server:        &http.Server{},
+		config:        config,
+		readyC:        make(chan struct{}, 1),
 	}, nil
 }
 
@@ -131,6 +135,13 @@ func (a *adminHTTPServer) SetHealthCheckFunc(fn func() error) {
 func (a *adminHTTPServer) handler() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		// Check whether the runner's context is throwing an error because its already cancelled. In such case we should
+		// just return the service is unavailable.
+		if a.runnerContext.Err() == context.Canceled {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("SERVICE UNAVAILABLE"))
+			return
+		}
 		if a.config.HealthcheckFunc == nil {
 			w.WriteHeader(http.StatusNotImplemented)
 			w.Write([]byte("NOT IMPLEMENTED"))

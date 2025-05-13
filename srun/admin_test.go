@@ -72,14 +72,16 @@ func TestAdminEndpoints(t *testing.T) {
 	}
 
 	// Use the default configuration, so it will start serving on :8778.
-	admin, err := newAdminServer(AdminServerConfig{
-		HealthcheckFunc: func() error {
-			return nil
-		},
-		ReadinessFunc: func() error {
-			return nil
-		},
-	})
+	admin, err := newAdminServer(
+		context.Background(),
+		AdminServerConfig{
+			HealthcheckFunc: func() error {
+				return nil
+			},
+			ReadinessFunc: func() error {
+				return nil
+			},
+		})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,9 +137,11 @@ func TestHealthcheckAndReadiness(t *testing.T) {
 
 	t.Run("healthcheck", func(t *testing.T) {
 		t.Parallel()
-		admin, err := newAdminServer(AdminServerConfig{
-			Address: ":8777",
-		})
+		admin, err := newAdminServer(
+			context.Background(),
+			AdminServerConfig{
+				Address: ":8777",
+			})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -197,9 +201,11 @@ func TestHealthcheckAndReadiness(t *testing.T) {
 
 	t.Run("readiness", func(t *testing.T) {
 		t.Parallel()
-		admin, err := newAdminServer(AdminServerConfig{
-			Address: ":8776",
-		})
+		admin, err := newAdminServer(
+			context.Background(),
+			AdminServerConfig{
+				Address: ":8776",
+			})
 		if err != nil {
 			t.Fatal(err)
 		}

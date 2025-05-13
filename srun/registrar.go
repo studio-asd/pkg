@@ -43,13 +43,13 @@ func (r *registrarRunnerAware) services() []Service {
 	return r.s
 }
 
-func RegisterInitAwareServices(services ...ServiceInitAware) *registrarInitAware {
+func RegisterInitServices(services ...ServiceInitAware) *registrarInitAware {
 	r := &registrarInitAware{}
 	r.register(services...)
 	return r
 }
 
-func RegisterRunnerAwareServices(services ...ServiceRunnerAware) *registrarRunnerAware {
+func RegisterRunnerServices(services ...ServiceRunnerAware) *registrarRunnerAware {
 	r := &registrarRunnerAware{}
 	r.register(services...)
 	return r

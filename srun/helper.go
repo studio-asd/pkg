@@ -320,7 +320,7 @@ func Serve(name string, runner ServiceRunner, fn func(ctx Context) error) error 
 		return err
 	}
 	return runner.Register(
-		RegisterRunnerAwareServices(lrt),
+		RegisterRunnerServices(lrt),
 	)
 }
 

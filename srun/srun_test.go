@@ -38,8 +38,8 @@ func TestRegistrar(t *testing.T) {
 			Name: "testing",
 		}))
 		if err := r.Register(
-			RegisterInitAwareServices(sdo1),
-			RegisterRunnerAwareServices(sdo2),
+			RegisterInitServices(sdo1),
+			RegisterRunnerServices(sdo2),
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -59,8 +59,8 @@ func TestRegistrar(t *testing.T) {
 			Name: "testing",
 		}))
 		if err := r.Register(
-			RegisterInitAwareServices(sdo1),
-			RegisterInitAwareServices(sdo2),
+			RegisterInitServices(sdo1),
+			RegisterInitServices(sdo2),
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -261,7 +261,7 @@ func TestGracefulShutdown(t *testing.T) {
 				return err
 			}
 			return runner.Register(
-				RegisterRunnerAwareServices(lrt2, lrt1),
+				RegisterRunnerServices(lrt2, lrt1),
 			)
 		})
 		if !errors.Is(err, errGracefulPeriodTimeout) {
@@ -744,7 +744,7 @@ level=INFO msg="[Service] a_service: STOPPED" logger_scope=service_runner
 				},
 			}
 			return runner.Register(
-				RegisterRunnerAwareServices(sdn),
+				RegisterRunnerServices(sdn),
 			)
 		})
 		if err != nil && isError(err) {
