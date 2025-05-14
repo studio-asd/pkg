@@ -109,6 +109,11 @@ func (s *Server) Run(ctx context.Context) error {
 	case <-ctx.Done():
 		return nil
 	case err := <-errC:
+		// The error server closed is returned after Shutdown is invoked, so it is expected to
+		// receive this error here.
+		if err == http.ErrServerClosed {
+			return nil
+		}
 		return err
 	}
 }

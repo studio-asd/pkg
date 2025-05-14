@@ -11,8 +11,8 @@ type ResourcesContainer struct {
 	// resourcess is a container that stores every single resource map inside the package.
 	// The resources is grouped by its each package name and can be retrieved through the
 	// generic Get function by passing both the package name and the resource name. For example
-	// we can retrieve the postgres resources by using "postgres.[resource_name]". We will automatically
-	// split the "." to separate the pacakge and resource name.
+	// we can retrieve the postgres resources by using 'Get[T](container, "resource_name")'.
+	// We will automatically retrieve the resource based on the type parameter.
 	resources map[string]map[string]any
 }
 

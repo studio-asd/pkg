@@ -28,6 +28,9 @@ type Config struct {
 	//	1. We can use it to test our binary to check whether it really runs or not.
 	//	2. We can use it to limit the execution time in an environment like function as a service.
 	DeadlineDuration time.Duration
+	// FlagFunc set a hook for the srun to parse the flags for the program. By default, the srun package already provides some
+	// flags to be used. But, client may define their own flags as needed via this function.
+	FlagFunc func(*FlagSet)
 }
 
 func (c *Config) Validate() error {

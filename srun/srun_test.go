@@ -846,7 +846,7 @@ func TestSrun(t *testing.T) {
 level=INFO msg="program is running in test configuration mode, triggering the test function" logger_scope=service_runner
 level=ERROR msg="in test config func"
 `
-		runCmd := exec.Command(testBinary, "--test-config")
+		runCmd := exec.Command(testBinary, "--test")
 		out, err := runCmd.CombinedOutput()
 		if err == nil {
 			t.Fatal("expecting error")

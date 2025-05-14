@@ -25,7 +25,7 @@ func TestParseFlags(t *testing.T) {
 		},
 		{
 			name:             "test config",
-			args:             []string{"--test-config"},
+			args:             []string{"--test"},
 			expectTestConfig: true,
 		},
 		{
@@ -49,7 +49,7 @@ func TestParseFlags(t *testing.T) {
 				"--feature.enable=feature_2",
 				"--feature.enable=feature_3",
 				"--version",
-				"--test-config",
+				"--test",
 			},
 			expectConfig: "some.yaml",
 			expectFeatures: map[string]bool{
@@ -64,15 +64,15 @@ func TestParseFlags(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			f := newFlags()
+			f := newFlags(nil)
 			if err := f.Parse(test.args...); err != nil {
 				t.Fatal(err)
 			}
 			if test.expectConfig != f.config {
 				t.Fatalf("expecting config %s but got %s", test.expectConfig, f.config)
 			}
-			if test.expectTestConfig != f.testConfig {
-				t.Fatalf("expecting test config %v but got %v", test.expectTestConfig, f.testConfig)
+			if test.expectTestConfig != f.test {
+				t.Fatalf("expecting test config %v but got %v", test.expectTestConfig, f.test)
 			}
 			if len(test.expectFeatures) != len(f.featureFlags) {
 				t.Fatalf("feature_flag: expecting length of %d but got %d", len(test.expectFeatures), len(f.featureFlags))

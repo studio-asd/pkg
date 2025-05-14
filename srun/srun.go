@@ -287,8 +287,8 @@ type Runner struct {
 
 	// flags store the command line flags via flag.FlagSet.
 	flags *Flags
-	// testConfFn is the function that will be triggered when --test-config flag is defined.
-	testConfFn func(Context) error
+	// testFn is the function that will be triggered when --test flag is defined.
+	testFn func(Context) error
 	// onExitFn is the function that will be triggered when the runner is exiting.
 	onExitFn func(context.Context, error) error
 }
@@ -325,7 +325,7 @@ func New(config Config) *Runner {
 	}
 	setDefaultSlog(conf.Logger)
 
-	f := newFlags()
+	f := newFlags(config.FlagFunc)
 	// If in test, then we should not try to prase the flags as there are many flags being passed inside go test.
 	if !testing.Testing() {
 		// Slice the args after first argument as the first argument is usually the program name.
@@ -484,17 +484,17 @@ func (r *Runner) registerDefaultServices(otelTracerProvider, otelMeterProvider *
 // 5. Stop ALL services.
 func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) (returnedErr error) {
 	r.logger.Info(fmt.Sprintf("Running program: %s", r.serviceName))
-	// If the program is running with --test-config then we should not attempted to run the whole program. In this case, just trigger
-	// the test config function then exit.
-	if r.flags.TestConfig() {
-		r.logger.Info("program is running in test configuration mode, triggering the test function")
-		// Return error if the --test-config flag is defined but the function is not being set.
-		if r.testConfFn == nil {
+	// If the program is running with --test then we should not attempted to run the whole program. In this case, just trigger
+	// the test function then exit.
+	if r.flags.Test() {
+		r.logger.Info("program is running in test mode, triggering the test function")
+		// Return error if the --test flag is defined but the function is not being set.
+		if r.testFn == nil {
 			return errors.New("test config function is empty")
 		}
 		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 		defer cancel()
-		if err := r.testConfFn(Context{
+		if err := r.testFn(Context{
 			RunnerAppName:  r.config.Name,
 			Ctx:            timeoutCtx,
 			Logger:         r.logger,
@@ -670,8 +670,8 @@ func (r *Runner) Run(run func(ctx context.Context, runner ServiceRunner) error) 
 //
 //	|-------------------|
 //	|resource-controller|
-//	|    http-server   	|
-//	|    grpc-server	| <- exit_first
+//	|    http-server    |
+//	|    grpc-server    | <- exit_first
 //	|-------------------|
 //
 // Then the grpc-server will stopped first, then http-server. And after all traffic is stopped then
@@ -711,8 +711,8 @@ func (r *Runner) stopServices() error {
 //
 //	|-------------------|
 //	|resource-controller| <- run_first
-//	|    http-server   	|
-//	|    grpc-server	|
+//	|    http-server    |
+//	|    grpc-server    |
 //	|-------------------|
 //
 // The resource controller will connects all databases and service dependencies first, then start the http-server
@@ -843,16 +843,16 @@ func (r *Runner) MustRun(run func(ctx context.Context, runner ServiceRunner) err
 	os.Exit(exitCode)
 }
 
-// SetTestConfigFunc sets the function for test configuration and will only be triggered if --test-config flag
+// SetTestFunc sets the function to test the program and will only be triggered if --test flag
 // is defined when running the program.
 //
-// With this function, the program then can run in a test mode on whether the program can run with the configuration
-// or not before fully running the program without --test-config flag.
-func (r *Runner) SetTestConfigFunc(fn func(Context) error) {
+// With this function, the program then can run in a test mode on whether the program can run with
+// or not before fully running the program without --test flag.
+func (r *Runner) SetTestFunc(fn func(Context) error) {
 	if fn == nil {
 		return
 	}
-	r.testConfFn = fn
+	r.testFn = fn
 }
 
 // isError returns true if the error is not expected by the runner. This function is needed and a bit unfortunate because

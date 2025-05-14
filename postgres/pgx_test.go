@@ -39,13 +39,13 @@ func TestCopyFrom(t *testing.T) {
 	tests := []struct {
 		name        string
 		columns     []string
-		values      [][]interface{}
+		values      [][]any
 		expectDatas []tableStruct
 	}{
 		{
 			"one row",
 			[]string{"a", "b"},
-			[][]interface{}{
+			[][]any{
 				{1, "one"},
 			},
 			[]tableStruct{
@@ -58,7 +58,7 @@ func TestCopyFrom(t *testing.T) {
 		{
 			"multiple rows",
 			[]string{"a", "b"},
-			[][]interface{}{
+			[][]any{
 				{1, "one"},
 				{2, "two"},
 				{3, "three"},
